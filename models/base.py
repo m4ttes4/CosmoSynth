@@ -722,12 +722,13 @@ class FittableModel(metaclass=ModelMeta):
             )
 
         iter_b = iter(b.values())
+        
         return {
             k: next(iter_b) if not mask else v.value
             for (k, v), mask in zip(a.items(), maschera)
         }
 
-    def __call__(self, grid: list, params: list = None):
+    def __call__(self, grid: list, params: list|dict = None):
         """
         Calcola i valori dei parametri basati sulla griglia e sui parametri forniti.
 
@@ -744,7 +745,9 @@ class FittableModel(metaclass=ModelMeta):
         
         
         if params is None:  # Caso 1: nessun parametro fornito
-            vals = self.parameters_values
+            
+            params = self.parameters_values
+            #print((isinstance(params, Iterable)) and (not isinstance(params, dict)))
             
         
         if isinstance(params, dict):
@@ -760,7 +763,8 @@ class FittableModel(metaclass=ModelMeta):
                     self.parameters, self._binary_freeze_map, params
                 ).values()
             )
-        elif isinstance(params, Iterable) and not isinstance(params, dict):
+            
+        elif isinstance(params, Iterable) and (not isinstance(params, dict)):
             if (
                 len(params) != self.n_free_parameters
             ):  # Caso 2: numero sbagliato di parametri
@@ -771,6 +775,7 @@ class FittableModel(metaclass=ModelMeta):
                 self.parameters_values, self._binary_freeze_map, params
             )
         else:
+            
             raise ValueError("Invalid type for params! Must be list or dict.")
 
         return self.evaluate(*grid, *vals)
@@ -1174,34 +1179,51 @@ class CompositeModel(FittableModel):
         Raises:
             ValueError: Se il numero di parametri non corrisponde al numero di parametri liberi.
         """
-        if params is None:
-            vals = self.parameters_values
-        elif isinstance(params, list):
-            if len(params) != self.n_free_parameters:
-                raise ValueError(
-                    f"Number of params {len(params)} does not match number of free parameters {(self.n_free_parameters)}!"
-                )
-            vals = self.map_args_to_values(
-                self.parameters_values, self._binary_freeze_map, params
-            )
-        elif isinstance(params, dict):
+        if params is None:  # Caso 1: nessun parametro fornito
+            params = self.parameters_values
+            # print((isinstance(params, Iterable)) and (not isinstance(params, dict)))
+
+        if isinstance(params, dict):
+            for name in params:
+                if name not in self:
+                    raise ValueError(f"Param {name} is not a parameter")
+                elif self[name].frozen:
+                    raise ValueError(f"Param {name} is Frozen!")
+
             vals = list(
                 self.map_kwargs_to_values(
                     self.parameters, self._binary_freeze_map, params
                 ).values()
             )
+
+        elif isinstance(params, Iterable) and (not isinstance(params, dict)):
+            if (
+                len(params) != self.n_free_parameters
+            ):  # Caso 2: numero sbagliato di parametri
+                raise ValueError(
+                    f"Number of params {len(params)} does not match number of free parameters {(self.n_free_parameters)}"
+                )
+            vals = self.map_args_to_values(
+                self.parameters_values, self._binary_freeze_map, params
+            )
         else:
             raise ValueError("Invalid type for params! Must be list or dict.")
 
         val_left, val_right = self.map_args(vals)
+        #print(val_left,val_right)
 
         if self.op_str in self.LINEAR_OPERATIONS:
             left_result = self.left(grid, val_left)
             right_result = self.right(grid, val_right)
+            return self._op(left_result, right_result)
+
         elif self.op_str == self.COMPOSITE_OPERATION:
             left_result = self.left(grid, val_left)
-            right_result = self.right(left_result, val_right)
-        return self._op(left_result, right_result)
+            #right_result = self.right(left_result, val_right)
+
+            return self.right(grid=[left_result],params=val_right)
+
+        #return self._op(left_result, right_result)
 
     def evaluate(self, *args, **kwargs):
         """

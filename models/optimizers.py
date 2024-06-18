@@ -27,9 +27,9 @@ class BaseOptimizer:
                 f"Dimension of x0 {len(x0)} do not match dimension of parameter space {self.model.n_free_parameters}"
             )
 
-        if self.model.n_dim != np.shape(data)[0]:
+        if self.model.n_dim != len(np.shape(data[0])):
             raise ValueError(
-                f"data number of dimension {np.shape(data)[0]} number of model dimensions {self.model.n_dim} "
+                f"data number of dimension {np.shape(data[0])[0]} number of model dimensions {self.model.n_dim} "
             )
         
         # 2 --- controllo se x0 è dict e lo converto in lista
@@ -187,7 +187,7 @@ class  NelderMead(LSTQFitter):
         grid, x0, data = self.pre_optim(grid, x0, data)
 
         # --- inizializazzione della funzione
-        x0 = np.asfarray(x0).flatten()  # converte in float e lo flatterizza
+        #x0 = np.asfarray(x0).flatten()  # converte in float e lo flatterizza
         N = len(x0)
         rank = len(np.shape(x0))
         constrains = [p.bounds for p in self.model.free_parameters]
@@ -207,7 +207,8 @@ class  NelderMead(LSTQFitter):
         self.simplex = self._generate_initial_simplex(N, x0, constrains, self.delta)
 
         # --- genero array dei valori di loss
-        print([self.loss(grid=grid, x0=point, data=data) for point in self.simplex])
+        #print(type(data), type(x0), type(grid))
+        #print([self.loss(grid=grid, x0=point, data=data) for point in self.simplex])
 
         self.loss_history = np.array([self.loss(grid=grid, x0=point, data=data) for point in self.simplex])
 
@@ -252,7 +253,7 @@ class  NelderMead(LSTQFitter):
                     self.loss_history[self.worst_index] = loss_contraction
                 else:
                     self.shrink(
-                        bounds=constrains, grid=grid, x0=x0)  # Chiama la funzione di shrink
+                        bounds=constrains, grid=grid, x0=x0, data=data)  # Chiama la funzione di shrink
 
             if np.max(self.loss_history) - np.min(self.loss_history) < self.treshold:
                 print("Treshold raggiunta")
