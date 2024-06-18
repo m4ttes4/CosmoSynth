@@ -28,8 +28,8 @@ def calcola_dimensioni(lista):
 #   l'evaluation di modelli senza output non è contemplata, come per esempio delle griglie su cui posso definire i modelli
 
 #   -- rendere più elastica la __call__ perchè attualmente gestisce solo parametri come liste
-#
-#
+#   
+#   # cachare i risultati fissi come numero di parametri e simili per non doversi ricalcolare
 
 #---------------------------------------------------------------------------------------------------------
 #
@@ -352,8 +352,7 @@ class FittableModel(metaclass=ModelMeta):
         # override della call evaluate nel istanza per poterla chimare con valori di default
         self.__evaluate__ = self.evaluate
         self.evaluate = self.base_evaluate
-        #print(self.__evaluate__)
-
+        
     def __post_init__(self):
         """
         Metodo eseguito dopo l'inizializzazione per ulteriori configurazioni.
@@ -490,7 +489,7 @@ class FittableModel(metaclass=ModelMeta):
         else:
             raise ValueError("Cannot give both args and kwargs!")
 
-    def set_parameter_bounds(self, args=None, **kwargs) -> None:
+    def set_parameters_bounds(self, args=None, **kwargs) -> None:
         """
         Imposta i limiti dei parametri utilizzando argomenti posizionali o parole chiave.
 
@@ -690,7 +689,7 @@ class FittableModel(metaclass=ModelMeta):
         return [next(iter_b) if not maschera[i] else a[i] for i in range(len(a))]
 
     @staticmethod
-    def map_kwargs_to_values(a, maschera, b):
+    def map_kwargs_to_values(a, maschera, b) -> dict:
         """
         Mappa i valori di `a` e `b` secondo una maschera fornita.
 
@@ -720,13 +719,23 @@ class FittableModel(metaclass=ModelMeta):
             raise ValueError(
                 "La lunghezza della maschera deve corrispondere alla lunghezza del dizionario 'a'"
             )
-
-        iter_b = iter(b.values())
+        result = {name: param.value for name,param in a.items()}
         
-        return {
-            k: next(iter_b) if not mask else v.value
-            for (k, v), mask in zip(a.items(), maschera)
-        }
+        for key,value in b.items():
+            if key not in a:
+                raise ValueError(f'{key} is not a parameter')
+            
+            if not a[key].frozen:
+                result[key] = value
+        
+        return result
+        
+        #iter_b = iter(b.values())
+        
+        #return {
+        #    k: next(iter_b) if not mask else v.value
+        #    for (k, v), mask in zip(a.items(), maschera)
+        #}
 
     def __call__(self, grid: list, params: list|dict = None):
         """
@@ -1027,7 +1036,7 @@ class CompositeModel(FittableModel):
                 return True, s[: match.start()]
         return False, s
 
-    def _combine_parameters(self):
+    def _combine_parameters(self) -> Tuple[ParameterHandler, dict]:
         """
         Rimappa i nomi dei parametri in accordo con l'id dei sottomodelli.
 
@@ -1258,4 +1267,4 @@ class CompositeModel(FittableModel):
         elif self.op_str == self.COMPOSITE_OPERATION:
             left_results = self.left.evaluate(*grid, *val_left)
             return self.right.evaluate(left_results, *val_right)
-        return
+        

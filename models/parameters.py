@@ -5,6 +5,19 @@ import numpy as np
 from functools import wraps
 from copy import deepcopy
 
+def cached_property(func):
+    """Cacha la proprietà così da rendere il calcolo più veloce."""
+
+    @property
+    @wraps(func)
+    def wrapper(self):
+        if not hasattr(self, "_cache"):
+            self._cache = {}  # Inizializza il cache se non esiste
+        if func.__name__ not in self._cache:
+            self._cache[func.__name__] = func(self)  # Calcola e memorizza il risultato
+        return self._cache[func.__name__]  # Ritorna il valore memorizzato
+
+    return wrapper
 
 class Constrain:
     def __init__(self, func: Callable, *args) -> None:
@@ -202,6 +215,7 @@ class Parameter:
     def __iter__(self):
         """
         Ritorna un iteratore per il parametro.
+        inutile(?)
 
         Returns:
             Iterator: Iteratore per il parametro.
@@ -371,19 +385,6 @@ class Constant(Parameter):
     
 
 
-def cached_property(func):
-    """Cacha la proprietà così da rendere il calcolo più veloce."""
-
-    @property
-    @wraps(func)
-    def wrapper(self):
-        if not hasattr(self, "_cache"):
-            self._cache = {}  # Inizializza il cache se non esiste
-        if func.__name__ not in self._cache:
-            self._cache[func.__name__] = func(self)  # Calcola e memorizza il risultato
-        return self._cache[func.__name__]  # Ritorna il valore memorizzato
-
-    return wrapper
 
 
 class ParameterHandler:
@@ -696,4 +697,13 @@ class ParameterHandler:
             ItemsView: Vista degli elementi del gestore.
         """
         return self._parameters.items()
+    
+    def keys(self):
+        """
+        Ritorna le key del dizionario base.
+
+        Returns:
+            KeysView: Vista delle keys del gestore.
+        """
+        return self._parameters.keys()
 
