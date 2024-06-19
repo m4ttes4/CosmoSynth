@@ -1,5 +1,5 @@
 import numpy as np
-from base import FittableModel
+from .base import FittableModel
 from typing import Union
 import tqdm
 

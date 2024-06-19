@@ -1,4 +1,4 @@
-from parameters import Parameter, ParameterHandler
+from .parameters import Parameter, ParameterHandler
 import inspect
 import re
 from copy import deepcopy

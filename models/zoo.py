@@ -1,5 +1,5 @@
 import numpy as np
-from base import FittableModel
+from .base import FittableModel
 from astropy.convolution import convolve_fft
 from scipy.ndimage import rotate
 
