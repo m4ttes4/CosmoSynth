@@ -146,14 +146,24 @@ class  NelderMead(LSTQFitter):
         new_point = np.clip(new_point, [b[0] for b in bounds], [b[1] for b in bounds])
         return new_point
 
-    def shrink(self, bounds, x0, grid,data):
+    '''def shrink(self, bounds, x0, grid,data):
     
         """Riduce il simplesso verso il miglior vertice."""
+        self.simplex[1:] = self.best + self.delta * (self.simplex[1:] - self.best)
+        #print(self.best + self.delta * (self.simplex[1:] - self.best))
+        self.simplex[1:] = np.clip(
+            self.simplex[1:], [b[0] for b in bounds], [b[1] for b in bounds]
+        )
+        
+        self.loss_history[1:] = np.apply_along_axis(self.loss, 1, [self.simplex[1:],x0, data])'''
+    def shrink(self, bounds, x0, grid, data):
         self.simplex[1:] = self.best + self.delta * (self.simplex[1:] - self.best)
         self.simplex[1:] = np.clip(
             self.simplex[1:], [b[0] for b in bounds], [b[1] for b in bounds]
         )
-        self.loss_history[1:] = np.apply_along_axis(self.loss(grid,x0,data), 1, self.simplex[1:])
+        self.loss_history[1:] = np.apply_along_axis(
+            lambda params: self.loss(grid, params, data), 1, self.simplex[1:]
+        )
 
     def get_vertices(self):
         """

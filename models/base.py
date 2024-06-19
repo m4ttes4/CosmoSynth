@@ -755,7 +755,7 @@ class FittableModel(metaclass=ModelMeta):
         
         if params is None:  # Caso 1: nessun parametro fornito
             
-            params = self.parameters_values
+            params = [p.value for p in self.free_parameters]
             #print((isinstance(params, Iterable)) and (not isinstance(params, dict)))
             
         
@@ -1189,7 +1189,7 @@ class CompositeModel(FittableModel):
             ValueError: Se il numero di parametri non corrisponde al numero di parametri liberi.
         """
         if params is None:  # Caso 1: nessun parametro fornito
-            params = self.parameters_values
+            params = [p.value for p in self.free_parameters]
             # print((isinstance(params, Iterable)) and (not isinstance(params, dict)))
 
         if isinstance(params, dict):
