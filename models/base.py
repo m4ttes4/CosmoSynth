@@ -26,10 +26,14 @@ def calcola_dimensioni(lista):
 # NOTE appunti di cose da migliorare
 #   un modello che ha un parametro da definire dentro __init__, allora il parametro non compare dentro alla lista
 #   l'evaluation di modelli senza output non è contemplata, come per esempio delle griglie su cui posso definire i modelli
-
-#   -- rendere più elastica la __call__ perchè attualmente gestisce solo parametri come liste
+#
+#   -- rendere più elastica la __call__ perchè attualmente gestisce solo parametri come liste o dict (idea... creare un wrapper alla funzione)
 #   
-#   # cachare i risultati fissi come numero di parametri e simili per non doversi ricalcolare
+#   -- cachare i risultati fissi come numero di parametri e simili per non doversi ricalcolare
+#
+#   -- aggiungere constrains in forma funzinale ai parametri   
+#
+#   -- MORE FASSSST 
 
 #---------------------------------------------------------------------------------------------------------
 #
@@ -41,6 +45,8 @@ class ModelMeta(type):
     def __new__(cls, name, bases, dct, **kwargs):
         """
         Crea una nuova classe modello con attributi specifici.
+        ATTUALMENTE si occupa solo di creare il dizionario di parametri
+        in futuro potrebbe essere inutile
 
         Parameters:
         -----------
