@@ -64,7 +64,7 @@ class BaseOptimizer:
             raise ValueError(
                 f"Grid dimension {len(np.shape(grid))} is not the same as model dimension {self.model.n_dim}!"
             )
-        return grid,x0, data
+        return np.array(grid),np.array(x0), data
     
     def minimize(self):
         raise NotImplementedError('Minimize function must be implemented by single optimizer')
@@ -271,3 +271,48 @@ class  NelderMead(LSTQFitter):
                 break
 
         return self.simplex[self.best_index]
+
+import emcee
+from multiprocess.pool import Pool
+class MCMC(BaseOptimizer):
+
+    def __init__(self, model: FittableModel,n_cores=4,**kwargs) -> None:
+        super().__init__(model, **kwargs)
+        self.n_cores=n_cores
+    #def _chi_2(self,  x0, grid,data):
+    #    return -np.nansum((self.model(grid, x0) - data)**2)
+    
+    def _prior(self, x0):
+        for point, bounds in zip(x0,self.model.parameters_bounds):
+            if not bounds[0] < point < bounds[1]:
+                return -np.inf
+        return 0.0
+    
+    def _chi_2(self,x0, grid, data):
+        sigma2 = .1
+        return -0.5 * np.sum((data - self.model(grid,x0)) ** 2 / sigma2 + np.log(sigma2))
+    
+    def _loss(self,x0,grid,data):
+        prior = self._prior(x0)
+        if not np.isfinite(prior):
+            return -np.inf
+        return self._chi_2(x0,grid,data)
+    
+    def minimize(self, grid, x0, data, nwalkers=32,maxiters=10_000, walkers_random=0.1):
+
+        grid, x0, data = self.pre_optim(grid, x0, data)
+        
+        ndim =len(x0)
+        
+        pos = [x0 + walkers_random * np.random.randn(ndim) for i in range(nwalkers)]
+
+        #with Pool(self.n_cores) as pool:
+
+        sampler = emcee.EnsembleSampler(nwalkers, 
+                                            ndim, 
+                                            self._loss, 
+                                            args=(grid, data),
+                                            pool=None)
+        sampler.run_mcmc(pos, maxiters, progress=True)
+
+        return sampler
