@@ -6,6 +6,18 @@ from typing import Callable, Tuple, Dict, List, Iterable
 import operator
 from itertools import compress
 
+
+def discrimina_iterabili(iterabile):
+    '''funzione comoda per discriminare il tipo di iterabile'''
+    if isinstance(iterabile, dict):
+        return 'dizionario'
+    elif isinstance(iterabile, list):
+        return 'lista'
+    elif hasattr(iterabile, '__iter__') and not isinstance(iterabile, (str, dict)):
+        return 'iterabile'
+    else:
+        return 'altro tipo'
+    
 def componemodels(op, **kwargs):
     return lambda left, right: CompositeModel(left, right, op, **kwargs)
 
@@ -34,7 +46,12 @@ def calcola_dimensioni(lista):
 #   -- aggiungere constrains in forma funzinale ai parametri   
 #
 #   -- MORE FASSSST 
-
+#
+#   -- operare in-place quando si crea un modello composito
+#
+#   -- BUG possibile: la discriminazione dei tipi di iterabili per ora prevede liste/dict/np.array
+    # ma non prevede iterabili generici come tuple,deque,sets. array.array, quindi si deve trovare metodo più generico
+#
 #---------------------------------------------------------------------------------------------------------
 #
 #

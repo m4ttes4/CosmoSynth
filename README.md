@@ -1,2 +1,2 @@
 # CosmoSynth
- Fast and easy to use low-level API for managing complex parametric models
+ Fast and easy to use low-level Framework for managing complex parametric models
