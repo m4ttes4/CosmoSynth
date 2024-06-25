@@ -47,14 +47,18 @@ def calcola_dimensioni(lista):
 #
 #   -- MORE FASSSST 
 #
-#   -- operare in-place quando si crea un modello composito
+#   -- operare in-place quando si crea un modello composito (no creare copie)
 #
 #   -- BUG possibile: la discriminazione dei tipi di iterabili per ora prevede liste/dict/np.array
     # ma non prevede iterabili generici come tuple,deque,sets. array.array, quindi si deve trovare metodo più generico
 #
 #---------------------------------------------------------------------------------------------------------
-#
-#
+#   #NOTE gestione migliore del tree:
+#    1- definizione stretta di foglie e nodi, FittableModel.isleaf = True, CompositeModel.isleaf=False
+#       utile per ripercorrere il tree e ricostruire meglio la ligica
+#   
+#   #NOTE usare un collections.userdict come base class per MParameterHandler per impedire la 
+#       rimozione di parametri dal dizionario da parte del utente 
 #
 #
 #----------------------------------------------------------------------------------------------------------
