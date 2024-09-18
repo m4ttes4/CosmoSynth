@@ -2,6 +2,7 @@ import numpy as np
 from .base import FittableModel
 from typing import Union
 import tqdm
+import emcee
 
 class OptimizerError:
     def __init__(self, msg) -> None:
@@ -272,8 +273,7 @@ class  NelderMead(LSTQFitter):
 
         return self.simplex[self.best_index]
 
-import emcee
-from multiprocess.pool import Pool
+
 class MCMC(BaseOptimizer):
 
     def __init__(self, model: FittableModel,n_cores=4,**kwargs) -> None:

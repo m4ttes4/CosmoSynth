@@ -393,6 +393,13 @@ class FittableModel(metaclass=ModelMeta):
         if hasattr(self, "_cache"):
             del self._cache
         self._parameters._invalidate_cache()
+    
+    @property
+    def left(self):
+        return None
+    @property
+    def right(self):
+        return None # è un leaf node per definizione
 
     @property
     def parameters_names(self) -> List[str]:
