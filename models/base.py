@@ -874,6 +874,95 @@ class FittableModel(metaclass=ModelMeta):
         else:
             vals = args[self.n_inputs :]
         return self.__evaluate__(*grid, *vals)
+    
+    @classmethod
+    def from_callable(cls, func, n_inputs = 0, n_dim = 0, n_outputs = 1, name = 'FittableModel',
+                      **kwargs):
+        """
+        Crea un'istanza del modello wrappando una funzione fornita.
+
+        Parameters:
+        -----------
+        func : Callable
+            La funzione da wrappare come modello.
+        kwargs : dict
+            Argomenti aggiuntivi per configurare il modello.
+
+        Returns:
+        --------
+        instance : Model
+            Un'istanza del modello che utilizza la funzione fornita.
+        """
+        # Estrai i parametri dalla funzione
+        param_names, param_defaults, is_constant = ModelMeta._extract_params(func)
+
+        # Crea un'istanza del modello senza chiamare `__init__`
+        instance = cls.__new__(cls)  # Crea l'istanza senza inizializzarla
+
+        # Inizializza gli attributi necessari
+        instance._param_dict = ParameterHandler()
+        instance._parameters = instance._param_dict  # Alias per compatibilità
+        instance._parameters_names = []
+        instance._is_composite = False
+        
+        if n_dim == 0 and n_inputs == 0 and n_outputs == 1:
+            if len(param_names) > 0:
+                n_dim = calcola_dimensioni(param_names)
+                n_inputs = calcola_dimensioni(param_names)
+                
+        instance._name = func.__name__
+        instance._n_outputs = n_outputs  # Valore di default
+        instance._n_inputs = n_inputs
+        instance._n_dim = n_dim
+        instance._grid = []
+        instance._grid_variables = []
+        instance.name = name
+
+        # Imposta _n_dim e _n_inputs a 0 per iniziare
+        
+
+        # Aggiorna i parametri dell'istanza con quelli estratti dalla funzione
+        for name, default, const in zip(
+            param_names[n_inputs:], param_defaults[n_inputs:], is_constant[n_inputs:]
+        ):
+            if name in instance._parameters:
+                instance._parameters[name].value = default
+                instance._parameters[name].frozen = const
+            else:
+                # Aggiungi un nuovo parametro se non è già presente
+                instance._parameters._add_parameter(
+                    Parameter(name, default, frozen=const)
+                )
+            instance._parameters_names.append(
+                name
+            )  # Aggiorna la lista dei nomi dei parametri
+
+        # Determina _n_dim e _n_inputs utilizzando calcola_dimensioni
+        if (
+            instance._n_dim == 0
+            and instance._n_inputs == 0
+            and instance._n_outputs == 1
+        ):
+            if len(param_names) > 0:
+                instance._n_dim = calcola_dimensioni(param_names)
+                instance._n_inputs = calcola_dimensioni(param_names)
+
+        # Imposta le variabili di griglia
+        instance._grid = param_names[: instance._n_inputs] if param_names else []
+        instance._grid_variables = instance._grid
+
+        # Sovrascrivi le variabili di griglia se specificate come kwargs
+        if "grid" in kwargs:
+            instance._grid = kwargs["grid"]
+            instance._grid_variables = instance._grid
+
+        # Imposta la funzione wrappata come `evaluate`
+        instance.evaluate = ModelMeta.wrapped_call(func, instance._parameters)
+
+        # Aggiorna `__evaluate__`
+        instance.__evaluate__ = instance.evaluate
+
+        return instance
 
     __add__ = componemodels("+")
     __mul__ = componemodels("*")
