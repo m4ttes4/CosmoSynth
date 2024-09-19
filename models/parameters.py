@@ -1,5 +1,6 @@
 from typing import List, Tuple, Union, Callable, Dict
 import numpy as np
+from collections import OrderedDict
 
 # import warnings
 from functools import wraps
@@ -254,9 +255,9 @@ class Parameter:
             str: Rappresentazione testuale del parametro.
         """
         total_string = f"PARAM NAME: {self.name}\n"
-        total_string += "_" * 100 + "\n"
+        total_string += "-" * 60 + "\n"
         total_string += f"{'NOME':<15} {'VALORE':<10} {'FREEZE':<10} {'BOUNDS':<20} {'DESCRIZIONE':<20} \n"
-        total_string += "_" * 100 + "\n"
+        total_string += "-" * 60 + "\n"
 
         value_str = f"{self._value:.5g}"
         bounds_str = f"({self._bounds[0]:.5g}, {self._bounds[1]:.5g})"
@@ -403,10 +404,13 @@ class ParameterHandler:
         Args:
             parameters (Union[Parameter, List[Parameter]], opzionale): Un singolo parametro o una lista di parametri.
         """
-        self._parameters = {}
+        self._parameters = OrderedDict()
         self._is_inside_model = (
             False  # Una volta dentro modello non posso aggiungere parametri
         )
+        
+        
+        
         if isinstance(parameters, Parameter):
             self._add_parameter(parameters)
         elif isinstance(parameters, list):
