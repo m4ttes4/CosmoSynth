@@ -1,6 +1,7 @@
 from typing import List, Tuple, Union, Callable, Dict
 import numpy as np
 from collections import OrderedDict
+import warnings
 
 # import warnings
 from functools import wraps
@@ -114,10 +115,9 @@ class Parameter:
         Raises:
             ValueError: Se il parametro è congelato o il nuovo valore è fuori dai limiti.
         """
-        if self._frozen:
-            raise ValueError(
-                f"Parametro {self._name} è congelato! Il nuovo valore non può essere impostato."
-            )
+        if self.frozen is True:
+            warnings.warn(f'Parameter {self.name} is frozen, new value will be ignored!')
+            return
         ParameterValidator.validate_value_in_bounds(new_value, self._bounds)
         self._value = new_value
 
@@ -143,6 +143,9 @@ class Parameter:
             TypeError: Se i nuovi limiti non sono una tupla di due elementi.
             ValueError: Se i nuovi limiti non sono validi.
         """
+        if self.frozen is True:
+            warnings.warn(f'Parameter {self.name} is frozen, new bounds will be ignored!')
+            return
         ParameterValidator.validate_bounds(new_bounds)
         ParameterValidator.validate_value_in_bounds(self._value, new_bounds)
         self._bounds = new_bounds
