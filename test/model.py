@@ -9,17 +9,6 @@ from itertools import islice
 import operator
 
 
-def calcola_dimensioni(lista):
-    # Variabili di controllo per la sequenza
-    dimensioni = 0
-    if lista[0] == "x" and lista[1] != "y":
-        dimensioni += 1
-    elif lista[0] == "x" and lista[1] == "y" and lista[2] != "z":
-        dimensioni += 2
-    elif lista[0] == "x" and lista[1] == "y" and lista[2] == "z":
-        dimensioni += 3
-
-    return dimensioni
 
 def componemodels(op, **kwargs):
     return lambda left, right: CompositeModel(left, right, op, **kwargs)
@@ -401,10 +390,70 @@ class Model:
             buffer.write(f"{i:<4} {param.name:<15} {value_str:<10} {frz:<10} {bounds_str:<20}\n")
         
         return buffer.getvalue()
+    
 
     def evaluate(self, *args, **kwargs):
+        """
+        Chiama la funzione wrappata `_callable` direttamente senza nessun overhead o controllo.
+        Questo metodo è pensato per essere utilizzato in situazioni in cui non si ha bisogno
+        di logiche aggiuntive su parametri, frozen, ecc.
+        """
         return self._callable(*args, **kwargs)
     
+    def validate_args(self, args, kwargs):
+        """
+        Prepara i parametri finali per la chiamata `_callable`.
+        Si assume che la validazione su 'args' sia già stata fatta.
+
+        Logica:
+        - `args` riempie i parametri liberi nell'ordine in cui sono definiti.
+        - I parametri congelati sono aggiunti con i loro valori correnti.
+        - `kwargs` può sovrascrivere qualsiasi parametro.
+        - Il risultato è un unico dizionario `final_args` che viene passato come **kwargs a `_callable`.
+        """
+        if len(args) > self.n_free_parameters:
+            raise ValueError(
+                f"Troppi argomenti forniti. "
+                f"Attesi al massimo {self.n_free_parameters}, ricevuti {len(args)}."
+            )
+        
+        # Costruiamo final_args vuoto e lo riempiamo in maniera incrementale
+        final_kwargs = {}
+
+        # Parametri liberi (free parameters)
+        free_params = self.free_parameters
+        for i, val in enumerate(args):
+            final_kwargs[free_params[i].name] = val
+
+        # Parametri congelati (frozen parameters)
+        # Qui non creiamo nuovi oggetti, iteriamo direttamente sui parametri congelati
+        # e assegnamo i valori al dizionario.
+        for p in self.frozen_parameters:
+            # Se il param. era già stato impostato via args (potenzialmente non avviene mai),
+            # viene sovrascritto qui con il valore congelato.
+            final_kwargs[p.name] = p.value
+
+        # Sovrascrivi con kwargs (eventuali parametri liberi o congelati)
+        # Qui applichiamo direttamente gli aggiornamenti su final_kwargs.
+        for k, v in kwargs.items():
+            final_kwargs[k] = v
+
+        return final_kwargs
+
+
+    def call(self, grid, *args, **kwargs):
+        """
+        Chiama la funzione `_callable` in un contesto di ottimizzazione:
+        - `grid`: variabili di griglia passate come argomenti posizionali.
+        - `args`: vettore dei parametri liberi nell'ordine in cui sono definiti.
+        - `kwargs`: sovrascrive qualunque parametro, libero o congelato.
+
+        La validazione di `args` e la preparazione degli argomenti finali sono metodi distinti.
+        """
+        final_args = self.validate_args(args, kwargs)
+        return self._callable(*grid, **final_args)
+        
+    '''
     def call(self, grid, *args, **kwargs):
         """
         Chiama la funzione wrappata con gli argomenti forniti.
@@ -432,13 +481,12 @@ class Model:
         #print('chiamata con,', final_args)
         
         # Chiama la funzione originale
-        return self._callable(*grid ,**final_args)
+        return self._callable(*grid ,**final_args)'''
         
         
     def __call__(self, *args, **kwargs):
         
         tmp = self.parameters_values_dict
-
         if kwargs:
             for key in kwargs:
                 if self[key].frozen:
@@ -551,7 +599,7 @@ class CompositeModel(Model):
         elif op == "-":
             val = operator.sub
         elif op == "**":
-            val == operator.pow
+            val = operator.pow
         else:
             val = None
         return val
@@ -683,98 +731,155 @@ class CompositeModel(Model):
         # Ritorna il contenuto del buffer
         return buffer.getvalue()
 
-
-        
     def evaluate(self, *args, **kwargs):
         """
-        Valuta il modello utilizzando i valori forniti come input.
+        Valuta il modello composito utilizzando i valori forniti come input.
+
+        Questo metodo si limita a comporre il risultato dell'evaluate del modello `left` e `right`
+        utilizzando l'operatore specificato. La composizione è trasparente, ossia i parametri del
+        modello composito vengono suddivisi tra `left` e `right`, e poi i due risultati vengono
+        combinati. Nel caso di un'operazione composita (COMPOSITE_OPERATION), l'output di `left`
+        viene passato come input a `right`.
 
         Args:
-            *args: Valori posizionali per le variabili della griglia.
-            **kwargs: Valori chiave per i parametri.
+            *args: Valori posizionali per le variabili della griglia. Il numero di variabili di griglia
+                è tipicamente `len(self.grid_variables)`.
+            **kwargs: Coppie chiave=valore per impostare i parametri del modello. Eventuali parametri
+                    forniti qui sovrascrivono quelli già presenti in `parameters_values_dict`.
 
         Returns:
-            Il risultato dell'evaluazione del modello.
+            Il risultato dell'evaluazione del modello composito, che può essere uno scalare o un array
+            a seconda della funzione `_callable` di `left` e `right`.
         """
-        # Costruzione iniziale della griglia e del dizionario dei parametri
+        # Costruzione della griglia e del dizionario dei parametri
         grid = args[: len(self.grid_variables)]
         tmp = {**self.parameters_values_dict, **kwargs}
 
-        # Prepara gli iteratori per dividere i valori di tmp
+        # Prepara gli iteratori per dividere i parametri tra left e right
         tmp_values = iter(tmp.values())
         left_keys, right_keys = self.left.parameters_keys, self.right.parameters_keys
 
-        # Creazione delle sottosezioni per left_vals e right_vals
+        # Dividi i parametri tra left e right
         left_vals = dict(zip(left_keys, islice(tmp_values, self.left.n_inputs)))
         right_vals = dict(zip(right_keys, tmp_values))
 
-        # Operazioni lineari
+        # Se l'operatore è lineare
         if self.op_str in self.LINEAR_OPERATIONS:
             return self._operator(
                 self.left.evaluate(*grid, **left_vals),
                 self.right.evaluate(*grid, **right_vals),
             )
-        # Operazioni composite
-        elif self.op_str in self.COMPOSITE_OPERATION:
+
+        # Se l'operatore è composito
+        elif self.op_str == self.COMPOSITE_OPERATION:
             left_res = [self.left.evaluate(*grid, **left_vals)]
             return self.right.evaluate(*grid, *left_res)
 
-        # Operazione sconosciuta
+        # Operatore sconosciuto
         raise ValueError(f"Unknown operation: {self.op_str}")
-    
+
+
     def call(self, grid, *args, **kwargs):
-               
+        """
+        Chiama il modello in un contesto, ad esempio, di ottimizzazione,
+        dove `args` rappresentano i valori per i parametri liberi nell'ordine in cui sono definiti.
+
+        Logica:
+        - `grid`: variabili di griglia passate come primo argomento.
+        - `args`: valori per i parametri liberi (non congelati), nell'ordine in cui appaiono.
+        - `kwargs`: può sovrascrivere i parametri (sia liberi che congelati) fornendo coppie chiave=valore.
+
+        I parametri complessivi del modello vengono ricavati da `parameters_values_dict`,
+        aggiornati con `kwargs`, e i parametri liberi vengono sostituiti con quelli passati in `args`.
+        Infine, il modello `left` e `right` vengono chiamati ricorsivamente e combinati secondo
+        l'operatore `op_str`.
+
+        Args:
+            grid: variabili di griglia, in genere un insieme di coordinate o input indipendenti.
+            *args: valori per i parametri liberi nell'ordine definito dai parametri stessi.
+            **kwargs: coppie chiave=valore per sovrascrivere qualsiasi parametro del modello.
+
+        Returns:
+            Il risultato della chiamata al modello composito, combinando `left` e `right` attraverso
+            l'operatore lineare o composito.
+        """
         if len(args) > self.n_free_parameters:
-            raise ValueError('To many argument for free parameters')
-        
+            raise ValueError(
+                f"Troppi argomenti forniti per i parametri liberi. "
+                f"Attesi al massimo {self.n_free_parameters}, ricevuti {len(args)}."
+            )
+
+
+        # Prepara i parametri finali
         tmp = list({**self.parameters_values_dict, **kwargs}.values())
 
+        # Identifica gli indici dei parametri liberi
         indices = [i for i in range(len(self._binary_melt_map)) if self._binary_melt_map[i]]
         for idx, value in zip(indices, args):
             tmp[idx] = value
-                
-        left = {key: val for key, val in zip(self.left.parameters_keys, tmp[:self.left.n_parameters])}
+
+        # Suddivisione dei parametri tra left e right
+        left = {
+            key: val
+            for key, val in zip(self.left.parameters_keys, tmp[: self.left.n_parameters])
+        }
         right = {
             key: val
-            for key, val in zip(
-                self.right.parameters_keys, tmp[self.left.n_parameters:]
-            )
-        }     
-        #print(left)
-        #print(right)
+            for key, val in zip(self.right.parameters_keys, tmp[self.left.n_parameters :])
+        }
+
+        # Chiamata ricorsiva ai modelli figli
         if self.op_str in self.LINEAR_OPERATIONS:
             return self._operator(
                 self.left.call(grid, **left),
                 self.right.call(grid, **right),
             )
 
-        elif self.op_str in self.COMPOSITE_OPERATION:
-            left_res = [self.left.call(grid,**left)]
-
+        elif self.op_str == self.COMPOSITE_OPERATION:
+            left_res = [self.left.call(grid, **left)]
             return self.right.call(*left_res)
-    
-    
+
+        raise ValueError(f"Unknown operation: {self.op_str}")
+
+
     def __call__(self, *args, **kwargs):
-        #grid = {key: kwargs.pop(key) for key in self.grid_variables}
-        grid = args[:len(self.grid_variables)]
+        """
+        Chiama il modello composito come fosse una funzione.
+
+        Questo metodo è pensato per un utilizzo più "diretto" e user-friendly. Accetta:
+        - `args`: I primi `len(self.grid_variables)` argomenti vengono interpretati come variabili di griglia.
+        - `kwargs`: Può contenere valori per parametri che non sono congelati. Se un parametro è congelato,
+        verrà emesso un warning e il valore fornito sarà ignorato.
+
+        Logica:
+        1. Estrae le grid variables dagli args.
+        2. Utilizza `parameters_values_dict` come base per i parametri.
+        3. Aggiorna i parametri non congelati con eventuali `kwargs`.
+        4. Suddivide i parametri aggiornati tra `left` e `right`.
+        5. Chiama `left.evaluate` e `right.evaluate` componendo i risultati con l'operatore.
+
+        Args:
+            *args: Valori posizionali, i primi `len(self.grid_variables)` sono le variabili di griglia.
+            **kwargs: Eventuali coppie chiave=valore per aggiornare i parametri non congelati.
+
+        Returns:
+            Il risultato della funzione combinata `left` e `right` secondo l'operatore `op_str`.
+        """
+        grid = args[: len(self.grid_variables)]
         tmp = self.parameters_values_dict
 
         if kwargs:
             for key in kwargs:
                 if self[key].frozen:
-                    warnings.warn(
-                        f"Parameter {key} is frozen, new value will be ignored"
-                    )
+                    warnings.warn(f"Parameter {key} is frozen, new value will be ignored")
                 else:
                     tmp[key] = kwargs[key]
 
         # Pre-calcola i valori di tmp una volta sola
         tmp_values = list(tmp.values())
 
-        # Usa un'unica lista per entrambi i dizionari
-        left_vals = {
-            key: val for key, val in zip(self.left.parameters_keys, tmp_values)
-        }
+        # Suddividi i parametri tra left e right
+        left_vals = {key: val for key, val in zip(self.left.parameters_keys, tmp_values)}
         right_vals = {
             key: val
             for key, val in zip(
@@ -788,9 +893,8 @@ class CompositeModel(Model):
                 self.right.evaluate(*grid, **right_vals),
             )
 
-        elif self.op_str in self.COMPOSITE_OPERATION:
+        elif self.op_str == self.COMPOSITE_OPERATION:
             left_res = [self.left.evaluate(*grid, **left_vals)]
-
             return self.right.evaluate(*left_res)
 
-
+        raise ValueError(f"Unknown operation: {self.op_str}")

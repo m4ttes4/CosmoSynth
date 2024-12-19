@@ -1,4 +1,9 @@
-
+'''
+Concetto idea generale di come funziona un prior.
+è un istanza di model (magari posso ereditare da una nuova classe "CallableModel" che permette di 
+definire Model(grid, theta))
+Il prior ritorna semplicemente Prior(point) = value
+'''
 
 class Prior:
     def __init__(self, name):
