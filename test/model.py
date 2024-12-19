@@ -374,49 +374,6 @@ class Model:
         return new_cls
 
     
-    @classmethod
-    def from_callable(
-        cls,
-        func,
-        ndim=None,
-        ninputs=None,
-        noutputs=1,
-        default_value=1,
-        name="SimpleModel",
-        **kwargs,
-    ):
-        names, values, frozen = cls._extract_params(
-            func, default_value=default_value, **kwargs
-        )
-
-        # check sul numero di dimensioni
-        if ndim is None:
-            ndim = calcola_dimensioni(names)
-
-        if ninputs is None:
-            ninputs = len(names) - calcola_dimensioni(names)
-
-        parameters = ParameterHandler()
-
-        for i in range(ndim, len(names)):
-            parameters.add_parameter(
-                Parameter(name=names[i], value=values[i], frozen=frozen[i])
-            )
-        # func, parameters, ndim, ninputs, noutputs, name="SimpleModel"
-
-        new_cls = cls(func, parameters, ndim, ninputs, noutputs, name)
-        new_cls._grid_variables = names[:ndim]  # Sovrascrive _grid_variables
-        new_cls.HAS_GRID = (
-            (len(new_cls.grid_variables) > 0)
-            if new_cls._grid_variables is not None
-            else False
-        )
-        if ndim == 0:
-            new_cls._ndim = 1
-
-        new_cls._ninputs = len(parameters) 
-        # new_cls._update_callable()
-        return new_cls
 
     def __str__(self):
         """
@@ -448,8 +405,37 @@ class Model:
     def evaluate(self, *args, **kwargs):
         return self._callable(*args, **kwargs)
     
-    
-    def __call__(self, *grid, **kwargs):
+    def call(self, grid, *args, **kwargs):
+        """
+        Chiama la funzione wrappata con gli argomenti forniti.
+        
+        Args:
+            *args: Valori per i parametri non congelati, forniti in ordine.
+        
+        Returns:
+            Il risultato della funzione originale con i parametri congelati.
+        """
+        if len(args) > self.n_free_parameters+len(self.grid_variables):
+            raise ValueError(f"Troppi argomenti forniti. Aspettati al massimo {self.n_free_parameters}.")
+        
+        # BUG: e se uno definisce le grid variables dopo gli args? --> devo usare kwargs        
+        #grid = args[:len(self.grid_variables)]
+        # Mappa gli args sui parametri non congelati
+        #provided_args = dict(zip(self.unfrozen_params, args))
+        provided_args = {p.name:arg for p,arg in zip(self.free_parameters,args)}
+        frozen_params = {p.name:p.value for p in self.frozen_parameters}
+        # Combina i parametri forniti con quelli congelati
+        final_args = {**frozen_params, **provided_args, **kwargs}
+        
+        # Ordina gli argomenti secondo l'ordine della funzione originale
+        #ordered_args = [final_args[param] for param in self.all_params]
+        #print('chiamata con,', final_args)
+        
+        # Chiama la funzione originale
+        return self._callable(*grid ,**final_args)
+        
+        
+    def __call__(self, *args, **kwargs):
         
         tmp = self.parameters_values_dict
 
@@ -462,7 +448,7 @@ class Model:
                 else:
                     tmp[key] = kwargs[key]
 
-        return self._callable(*grid, **tmp)
+        return self._callable(*args, **tmp)
 
     def __getitem__(self, name: str) -> Parameter:
         return self.parameters[name]
@@ -731,11 +717,43 @@ class CompositeModel(Model):
         # Operazioni composite
         elif self.op_str in self.COMPOSITE_OPERATION:
             left_res = [self.left.evaluate(*grid, **left_vals)]
-            return self.right.evaluate(*left_res)
+            return self.right.evaluate(*grid, *left_res)
 
         # Operazione sconosciuta
         raise ValueError(f"Unknown operation: {self.op_str}")
+    
+    def call(self, grid, *args, **kwargs):
+               
+        if len(args) > self.n_free_parameters:
+            raise ValueError('To many argument for free parameters')
+        
+        tmp = list({**self.parameters_values_dict, **kwargs}.values())
 
+        indices = [i for i in range(len(self._binary_melt_map)) if self._binary_melt_map[i]]
+        for idx, value in zip(indices, args):
+            tmp[idx] = value
+                
+        left = {key: val for key, val in zip(self.left.parameters_keys, tmp[:self.left.n_parameters])}
+        right = {
+            key: val
+            for key, val in zip(
+                self.right.parameters_keys, tmp[self.left.n_parameters:]
+            )
+        }     
+        #print(left)
+        #print(right)
+        if self.op_str in self.LINEAR_OPERATIONS:
+            return self._operator(
+                self.left.call(grid, **left),
+                self.right.call(grid, **right),
+            )
+
+        elif self.op_str in self.COMPOSITE_OPERATION:
+            left_res = [self.left.call(grid,**left)]
+
+            return self.right.call(*left_res)
+    
+    
     def __call__(self, *args, **kwargs):
         #grid = {key: kwargs.pop(key) for key in self.grid_variables}
         grid = args[:len(self.grid_variables)]
