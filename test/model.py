@@ -27,7 +27,7 @@ class Model:
 
     def __init__(self, func, parameters, ndim, ninputs, noutputs, name="SimpleModel") -> None:
         
-        # NOTE rendere Model chiamabile direttamente come wrapper a funzione in stile LMFIT
+        # TODO rendere Model chiamabile direttamente come wrapper a funzione in stile LMFIT
         self._parameters = parameters
         self._ndim = ndim
         self._ninputs = ninputs
@@ -327,40 +327,117 @@ class Model:
         return list(params.keys()), list(params.values()), is_constant
 
     @classmethod
-    def wrap(cls, func, grid_variables=None, ndim=1, noutputs=1,default_values=1.0, name='SimpleModel'):
+    def wrap(cls, func, grid_variables=None, params=None, ndim=None, noutputs=1, default_values=1.0, name='SimpleModel'):
+        """
+        Wrap a given function and create a model class instance with specified parameters and grid variables.
+
+        Parameters
+        ----------
+        func : callable
+            The function to be wrapped. It should accept a set of parameters that will be defined
+            as either grid variables or free parameters.
+        grid_variables : iterable of str, optional
+            The names of the variables that represent grid dimensions. If not provided and `params` is given,
+            the grid variables will be inferred as all arguments of the function that are not in `params`.
+        params : iterable of str, optional
+            The names of the parameters that are non-grid variables (i.e., free parameters).
+            If not provided and `grid_variables` is given, the parameters will be inferred as all arguments
+            of the function that are not in `grid_variables`.
+        ndim : int, optional
+            The number of dimensions (based on `grid_variables`). If None, it will be inferred 
+            from `grid_variables`. Default is 1.
+        noutputs : int, optional
+            The number of outputs the wrapped function returns. Default is 1.
+        default_values : float or iterable of floats, optional
+            Default initial values for the parameters. If a single float is given, it will be 
+            used for all parameters. Default is 1.0.
+        name : str, optional
+            The name of the model. Default is 'SimpleModel'.
+
+        Returns
+        -------
+        object
+            An instance of the class, with attributes and parameters set according to the provided arguments.
+
+        Raises
+        ------
+        ValueError
+            If a specified grid variable or parameter is not present in the function arguments.
+            If both `params` and `grid_variables` are None.
+            If the number of grid variables does not match `ndim`.
+            If the total number of function arguments does not match the sum of the number of 
+            grid variables and parameters.
+        """
+
+        # Extract the parameter names, values, and frozen status from the function
         names, values, frozen = cls._extract_params(func, default_values)
-        _name = name
-        if grid_variables is None:
-            _grid = []
-        else:
-            _grid = grid_variables
-            for name in _grid:
-                if name not in names:
-                    raise ValueError(f'Grid variable {name} is not present in function call')
-            
-        if ndim is None and grid_variables is not None:
+
+        # Check that we have at least one between params and grid_variables
+        if params is None and grid_variables is None:
+            raise ValueError("At least one between 'params' and 'grid_variables' must be provided.")
+
+        # Convert grid_variables and params to lists if they are not None
+        _grid = list(grid_variables) if grid_variables is not None else None
+        _params = list(params) if params is not None else None
+
+        # If grid_variables is given but params is None, infer params
+        if _grid is not None and _params is None:
+            # Check that all grid variables are in names
+            for gv in _grid:
+                if gv not in names:
+                    raise ValueError(f'Grid variable {gv} is not present in function call')
+            _params = [n for n in names if n not in _grid]
+
+        # If params is given but grid_variables is None, infer grid_variables
+        if _params is not None and _grid is None:
+            # Check that all params are in names
+            for p in _params:
+                if p not in names:
+                    raise ValueError(f'Parameter {p} is not present in function call')
+            _grid = [n for n in names if n not in _params]
+
+        # Now both _grid and _params are defined
+        # Check consistency between ndim and grid_variables
+        if ndim is None:
             _ndim = len(_grid)
         else:
-            _ndim = 1
-                
-        if ndim is not None and grid_variables is not None:
-            if ndim != len(grid_variables):
-                raise ValueError('Number of dimensions do not match number of grid variables')
-            _ndim = len(grid_variables)
-        
-        _ninputs = len(names)   # numero totale di inputs del evaluate
+            _ndim = ndim
+            if len(_grid) != _ndim:
+                raise ValueError('Number of dimensions (ndim) does not match the number of grid variables')
+
+        # Check that all given grid variables are in names
+        for gv in _grid:
+            if gv not in names:
+                raise ValueError(f'Grid variable {gv} is not present in function call')
+
+        # Check that all given params are in names
+        for p in _params:
+            if p not in names:
+                raise ValueError(f'Parameter {p} is not present in function call')
+
+        # Check total number of arguments
+        if len(names) != len(_grid) + len(_params):
+            raise ValueError(
+                f"The total number of function arguments ({len(names)}) must equal "
+                f"the number of grid variables ({len(_grid)}) plus the number of parameters ({len(_params)})"
+            )
+
+        _ninputs = len(names)   # total number of inputs to evaluate
         _noutputs = noutputs
 
         parameters = ParameterHandler()
-        for i in range(len(names)):
-            if names[i] not in _grid:
+        # Add parameters (not grid variables) to the ParameterHandler
+        for i, n in enumerate(names):
+            if n in _params:
                 parameters.add_parameter(
-                    Parameter(name=names[i], value=values[i], frozen=frozen[i])
+                    Parameter(name=n, value=values[i], frozen=frozen[i])
                 )
-        new_cls = cls(func, parameters, _ndim, _ninputs, _noutputs, _name)
+        parameters._is_inside_model = True
+        new_cls = cls(func, parameters, _ndim, _ninputs, _noutputs, name)
         new_cls._grid_variables = _grid
-                
         return new_cls
+
+
 
     
 
@@ -396,14 +473,13 @@ class Model:
         """
         Chiama la funzione wrappata `_callable` direttamente senza nessun overhead o controllo.
         Questo metodo è pensato per essere utilizzato in situazioni in cui non si ha bisogno
-        di logiche aggiuntive su parametri, frozen, ecc.
+        di logiche aggiuntive su parametri, frozen.
         """
         return self._callable(*args, **kwargs)
     
     def validate_args(self, args, kwargs):
         """
         Prepara i parametri finali per la chiamata `_callable`.
-        Si assume che la validazione su 'args' sia già stata fatta.
 
         Logica:
         - `args` riempie i parametri liberi nell'ordine in cui sono definiti.
@@ -697,7 +773,7 @@ class CompositeModel(Model):
             dfs(node.right)
 
         dfs(self)
-
+        parameters._is_inside_model = True
         return parameters
 
     def __str__(self):

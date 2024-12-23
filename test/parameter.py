@@ -25,6 +25,12 @@ class Parameter:
         frozen (bool): Stato di congelamento del parametro.
         bounds (Tuple[float, float]): Limiti del parametro.
         description (str): Descrizione del parametro.
+    
+    TODO: supporto a call esterne e alle unità (che diventa la nuoova description),
+        supporto a parametri con valori diversi da float?
+        VectorParameter(Parameter)
+        DictParameter(Parameter)
+        FloatParameter = VectorParameter(dim=1) ?
     """
 
     def __init__(
@@ -770,16 +776,23 @@ class ParameterHandler:
         Raises:
             ValueError: Se il parametro esiste già o se si tenta di aggiungere un parametro dopo la creazione del modello.
         """
+        
+        #if self._is_inside_model:
+        #    raise ValueError(f"Cannot add parameter {name} to model after it is locked")
+        
+        if not isinstance(parameter, Parameter):
+            raise TypeError("Added parameter must be istance of Parameter class")
+        
         if name is None:
             name = parameter.name
+        
+        if name not in self._parameters and self._is_inside_model:
+            raise ValueError(
+                f"Parameter {name} does not exists in function call. Write a new function call or build a composite model"
+            )
 
-        if self._is_inside_model:
-            raise ValueError(f"Cannot add parameter {name} to model after it is locked")
-        if not isinstance(parameter, Parameter):
-            raise TypeError("Addes parameter must be istance of Parameter class")
-
-        if name in self._parameters:
-            raise ValueError(f"Parameter {name} already exists.")
+        #if name in self._parameters:
+        #    raise ValueError(f"Parameter {name} already exists.")
 
         # if name is None:
         #    name = parameter.name
@@ -822,13 +835,16 @@ class ParameterHandler:
         """
         # if self._is_inside_model:
         #    raise ValueError(f"Cannot add parameter {key} to model after it is locked")
-        if not isinstance(value, Parameter):
-            raise TypeError(
-                f"New parameter must be instance of Parameter, not {type(value)}"
+        #if not isinstance(value, Parameter):
+        #    raise TypeError(
+        #        f"New parameter must be instance of Parameter, not {type(value)}"
+        #    )
+        if key not in self._parameters and self._is_inside_model:
+            raise ValueError(
+                f"Parameter {key} does not exists in function call please Write a new function call or build a composite model"
             )
-        if key in self._parameters:
-            raise ValueError(f"Parameter {key} already exists.")
-        self._parameters[key] = value
+        self.add_parameter(value)
+        #self._parameters[key] = value
         self._update_cache()
         #self._invalidate_cache()
 
