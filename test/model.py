@@ -2,42 +2,51 @@ import inspect
 from copy import deepcopy
 import warnings
 from parameter import Parameter, ParameterHandler
-from typing import List,  Tuple
+from typing import Callable, List,  Tuple
 from io import StringIO
 from collections  import OrderedDict
 from itertools import islice
 import operator
 
-
+'''
+TODO: nuova gestione delle chiamate
+__call__ prende args la griglia, kwargs i parametri
+evaluate rimane così (ma da snellire per composite model)
+call richiede tanti args quanti parametri liberi
+'''
 
 def componemodels(op, **kwargs):
     return lambda left, right: CompositeModel(left, right, op, **kwargs)
 
 class Model:
-    # That means we can't optimize a method with **kwargs directly.
-    # Also I think in the cover method we need to pass on the f(**z) method, right?
-    # def g(f, x, z2):
-    #   return f(z1=x[0], z2=z2, z3=x[1])
+    '''BUG se cambio nome di parametro mode[param].name = new_name, rompo le evaluation di funzione'''
+   
     _name = "SimpleModel"
     _parameters = ParameterHandler()
     _grid_variables = []    # args from evaluate that defines the grid
-    _ndim = 1       #number of dimensions in wich the model is defined
-    _ninputs = 1    # total number of inputs that defines the evaluate call
-    _noutputs = 1   # number of outputs, i.e number of elements returned from evaluate call
+    _n_dims = 1       #number of dimensions in wich the model is defined
+    _n_inputs = 1    # total number of inputs that defines the evaluate call
+    _n_outputs = 1   # number of outputs, i.e number of elements returned from evaluate call
 
-    def __init__(self, func, parameters, ndim, ninputs, noutputs, name="SimpleModel") -> None:
+    def __init__(self, 
+                 func:Callable, 
+                 parameters:ParameterHandler, 
+                 ndim:int, ninputs:int, noutputs:int, name:str="SimpleModel") -> None:
         
         # TODO rendere Model chiamabile direttamente come wrapper a funzione in stile LMFIT
+        # implementare self._initialize_from_callable e self._initilize_from_wrap per i due casi
         self._parameters = parameters
-        self._ndim = ndim
-        self._ninputs = ninputs
-        self._noutputs = noutputs
+        self._n_dims = ndim
+        self._n_inputs = ninputs
+        self._n_outputs = noutputs
         self._callable = func
         self._name = name
         self._grid_variables = []  # Inizializza _grid_variables nel costruttore
-        self._cache = {}  # cache base
+        #self._cache = {}  # cache base
 
     def _update_cache(self, key, value) -> None:
+        '''TODO: odio come ho implementato la cache,
+        trova un modo migliore pls'''
         self._parameters._update_cache(key, value)
 
     # POINTER PROPRIETA
@@ -57,15 +66,15 @@ class Model:
 
     @property
     def n_dim(self):
-        return self._ndim
+        return self._n_dims
 
     @property
     def n_inputs(self):
-        return self._ninputs
+        return self._n_inputs
 
     @property
     def n_outputs(self):
-        return self._noutputs
+        return self._n_outputs
 
     @property
     def grid_variables(self):
@@ -134,7 +143,7 @@ class Model:
         return None
 
     @property
-    def not_frozen_indeces(self):
+    def not_frozen_indeces(self) -> List[int]:
         return self.parameters.not_frozen_indeces
         #if "not_frozen_indeces" in self._cache:
         #    return self._cache["not_frozen_indeces"]
@@ -145,7 +154,7 @@ class Model:
         #]
 
     @property
-    def frozen_indeces(self):
+    def frozen_indeces(self) -> List[int]:
         return self.parameters.frozen_indeces
         #if "frozen_indeces" in self._cache:
         #    return self._cache["frozen_indeces"]
@@ -291,7 +300,7 @@ class Model:
         )
 
     @staticmethod
-    def _extract_params(method, default_value=1, **kwargs):
+    def _extract_params(method, default_value=1, **kwargs) -> tuple[list[str], list[float], list[bool]]:
         """
         Estrae i nomi e i valori di default dei parametri dal metodo evaluate.
 
@@ -327,7 +336,7 @@ class Model:
         return list(params.keys()), list(params.values()), is_constant
 
     @classmethod
-    def wrap(cls, func, grid_variables=None, params=None, ndim=None, noutputs=1, default_values=1.0, name='SimpleModel'):
+    def wrap(cls, func, grid_variables=None, params=None, ndim=None, noutputs=1, default_values=1.0, initial_values:dict|None = None, name='SimpleModel'):
         """
         Wrap a given function and create a model class instance with specified parameters and grid variables.
 
@@ -374,35 +383,37 @@ class Model:
 
         # Check that we have at least one between params and grid_variables
         if params is None and grid_variables is None:
-            raise ValueError("At least one between 'params' and 'grid_variables' must be provided.")
+            _grid = []
+            _params = names
+            #raise ValueError("At least one between 'params' and 'grid_variables' must be provided.")
+        else:
+            # Convert grid_variables and params to lists if they are not None
+            _grid = list(grid_variables) if grid_variables is not None else None
+            _params = list(params) if params is not None else None
 
-        # Convert grid_variables and params to lists if they are not None
-        _grid = list(grid_variables) if grid_variables is not None else None
-        _params = list(params) if params is not None else None
+            # If grid_variables is given but params is None, infer params
+            if _grid is not None and _params is None:
+                # Check that all grid variables are in names
+                for gv in _grid:
+                    if gv not in names:
+                        raise ValueError(f'Grid variable {gv} is not present in function call')
+                _params = [n for n in names if n not in _grid]
 
-        # If grid_variables is given but params is None, infer params
-        if _grid is not None and _params is None:
-            # Check that all grid variables are in names
-            for gv in _grid:
-                if gv not in names:
-                    raise ValueError(f'Grid variable {gv} is not present in function call')
-            _params = [n for n in names if n not in _grid]
-
-        # If params is given but grid_variables is None, infer grid_variables
-        if _params is not None and _grid is None:
-            # Check that all params are in names
-            for p in _params:
-                if p not in names:
-                    raise ValueError(f'Parameter {p} is not present in function call')
-            _grid = [n for n in names if n not in _params]
+            # If params is given but grid_variables is None, infer grid_variables
+            if _params is not None and _grid is None:
+                # Check that all params are in names
+                for p in _params:
+                    if p not in names:
+                        raise ValueError(f'Parameter {p} is not present in function call')
+                _grid = [n for n in names if n not in _params]
 
         # Now both _grid and _params are defined
         # Check consistency between ndim and grid_variables
         if ndim is None:
-            _ndim = len(_grid)
+            _n_dims = len(_grid)
         else:
-            _ndim = ndim
-            if len(_grid) != _ndim:
+            _n_dims = ndim
+            if len(_grid) != _n_dims:
                 raise ValueError('Number of dimensions (ndim) does not match the number of grid variables')
 
         # Check that all given grid variables are in names
@@ -422,8 +433,8 @@ class Model:
                 f"the number of grid variables ({len(_grid)}) plus the number of parameters ({len(_params)})"
             )
 
-        _ninputs = len(names)   # total number of inputs to evaluate
-        _noutputs = noutputs
+        _n_inputs = len(names)   # total number of inputs to evaluate
+        _n_outputs = noutputs
 
         parameters = ParameterHandler()
         # Add parameters (not grid variables) to the ParameterHandler
@@ -432,8 +443,20 @@ class Model:
                 parameters.add_parameter(
                     Parameter(name=n, value=values[i], frozen=frozen[i])
                 )
+        # adjuct for initial values
+        if initial_values is not None:
+            if not isinstance(initial_values, dict):
+                raise TypeError("Initial values for parames mus be of type dict <str:val>")
+            
+            for pname, pval in initial_values.items():
+                if pname in parameters:
+                    parameters[pname].value = pval
+                else:
+                    warnings.warn(f'parameter name {pname} is not a parameter for the model')
+                 
         parameters._is_inside_model = True
-        new_cls = cls(func, parameters, _ndim, _ninputs, _noutputs, name)
+        parameters._update_cache()
+        new_cls = cls(func, parameters, _n_dims, _n_inputs, _n_outputs, name)
         new_cls._grid_variables = _grid
         return new_cls
 
@@ -471,6 +494,7 @@ class Model:
 
     def evaluate(self, *args, **kwargs):
         """
+        TODO: add support for jax and autodiff
         Chiama la funzione wrappata `_callable` direttamente senza nessun overhead o controllo.
         Questo metodo è pensato per essere utilizzato in situazioni in cui non si ha bisogno
         di logiche aggiuntive su parametri, frozen.
@@ -487,12 +511,22 @@ class Model:
         - `kwargs` può sovrascrivere qualsiasi parametro.
         - Il risultato è un unico dizionario `final_args` che viene passato come **kwargs a `_callable`.
         """
-        if len(args) > self.n_free_parameters:
+        if len(args) != self.n_free_parameters:
             raise ValueError(
-                f"Troppi argomenti forniti. "
-                f"Attesi al massimo {self.n_free_parameters}, ricevuti {len(args)}."
+                #f"To much args given!. "
+                f"expected {self.n_free_parameters}, got {len(args)}."
+                "number of args must be equal to number of free parameters"
             )
+            
+        '''final_kwargs = {**self.parameters_values_dict}
         
+        j = 0
+        for key in self.parameters_keys:
+            if not self[key].frozen:
+                final_kwargs[key] = args[j]
+        
+        final_kwargs.update(**kwargs)'''
+            
         # Costruiamo final_args vuoto e lo riempiamo in maniera incrementale
         final_kwargs = {}
 
@@ -561,6 +595,9 @@ class Model:
         
         
     def __call__(self, *args, **kwargs):
+        '''
+        TODO: modificare la __call__ per renderla più flessibile e veloce
+        '''
         
         tmp = self.parameters_values_dict
         if kwargs:
@@ -614,48 +651,57 @@ class CompositeModel(Model):
     _callable = None
 
     def __init_subclass__(cls) -> None:
+        ## deprecated
         return super().__init_subclass__()
 
     def __init__(self, left=None, right=None, op="+") -> None:
         self._left = left
         self._right = right
+        
+        ## check models
+        if not isinstance(left, Model):
+            raise ValueError(f"CompositeModel: argument {left} is not a Model")
+        if not isinstance(right, Model):
+            raise ValueError(f"CompositeModel: argument {right} is not a Model")
+        
         self.op_str = op
         self._operator = self.map_operator(op)
 
-        self._n_dim, self._n_inputs, self._noutputs = self._update_n_dim()
+        self._n_dim, self._n_inputs, self._n_outputs = self._update_n_dim()
         self._parameters = self._init_parameters()
         self.submodels = self._collect_submodels()
-        self._cache = {}
+        #self._cache = {}
 
     @property
-    def left(self):
+    def left(self) -> Model|None:
         return self._left
 
     @property
-    def right(self):
+    def right(self) -> Model|None:
         return self._right
 
     @property
-    def parameters(self):
+    def parameters(self) -> ParameterHandler:
         return self._parameters
 
     @property
-    def n_dim(self):
+    def n_dim(self) -> int:
         return self._n_dim
 
     @property
-    def n_inputs(self):
+    def n_inputs(self) -> int:
         return self._n_inputs
 
     @property
-    def n_outputs(self):
-        return self._noutputs
+    def n_outputs(self) -> int:
+        return self._n_outputs
 
     @property
-    def grid_variables(self):
+    def grid_variables(self) -> List[str]:
+        # always propagate the left branch
         return self.left.grid_variables
 
-    def map_operator(self, op):
+    def map_operator(self, op) -> Callable|None:
         """
         Mappa l'operatore dato a una funzione corrispondente.
 
@@ -680,7 +726,7 @@ class CompositeModel(Model):
             val = None
         return val
 
-    def _update_n_dim(self):
+    def _update_n_dim(self) -> Tuple[int, int, int]:
         """
         Controlla gli inputs e gli outputs dei sottomodelli per essere sicuro
         che le operazioni binarie siano supportate.
@@ -709,12 +755,12 @@ class CompositeModel(Model):
 
         return n_dim, n_inputs, n_outputs
 
-    def _collect_submodels(self):
-        param_map = OrderedDict()
+    def _collect_submodels(self) -> List[Model]:
+        #param_map = OrderedDict()
         submodels = []
 
         def dfs(node):
-            nonlocal param_map, submodels
+            nonlocal submodels  # ,param_map
             if not node:
                 return
 
@@ -730,7 +776,7 @@ class CompositeModel(Model):
 
         return submodels
 
-    def composite_structure(self):
+    def composite_structure(self) -> str:
         """
         Restituisce una stringa che rappresenta la logica con cui i sottomodelli sono uniti.
 
@@ -749,7 +795,7 @@ class CompositeModel(Model):
         structure, _ = helper(self, 0)
         return structure
 
-    def _init_parameters(self):
+    def _init_parameters(self) -> ParameterHandler:
         """Crea un Nuovo ParameterHandler con i nomi cambiati dei parametri ma mappati
         agli stessi parametri originali
         """
@@ -879,10 +925,10 @@ class CompositeModel(Model):
             Il risultato della chiamata al modello composito, combinando `left` e `right` attraverso
             l'operatore lineare o composito.
         """
-        if len(args) > self.n_free_parameters:
+        if len(args) != self.n_free_parameters:
             raise ValueError(
-                f"Troppi argomenti forniti per i parametri liberi. "
-                f"Attesi al massimo {self.n_free_parameters}, ricevuti {len(args)}."
+                #f"Troppi argomenti forniti per i parametri liberi. "
+                f"expected {self.n_free_parameters} args, got {len(args)}."
             )
 
 
@@ -901,19 +947,22 @@ class CompositeModel(Model):
         }
         right = {
             key: val
-            for key, val in zip(self.right.parameters_keys, tmp[self.left.n_parameters :])
+            for key, val in zip(self.right.parameters_keys, tmp[self.left.n_parameters:])
         }
-
+        #print(left)
+        #print(tmp, tmp[self.left.n_parameters :])
+        #print(right)
         # Chiamata ricorsiva ai modelli figli
         if self.op_str in self.LINEAR_OPERATIONS:
             return self._operator(
-                self.left.call(grid, **left),
-                self.right.call(grid, **right),
+                self.left.evaluate(*grid, **left),
+                self.right.evaluate(*grid, **right),
             )
 
         elif self.op_str == self.COMPOSITE_OPERATION:
-            left_res = [self.left.call(grid, **left)]
-            return self.right.call(*left_res)
+            left_res = [self.left.evaluate(*grid, **left)]
+            
+            return self.right.evaluate(*left_res, *self.right.parameters_values)
 
         raise ValueError(f"Unknown operation: {self.op_str}")
 
@@ -959,10 +1008,11 @@ class CompositeModel(Model):
         right_vals = {
             key: val
             for key, val in zip(
-                self.right.parameters_keys, tmp_values[self.left.n_inputs :]
+                self.right.parameters_keys, tmp_values[self.left.n_inputs -1:]
             )
         }
-
+        #print(left_vals)
+        #print(right_vals)
         if self.op_str in self.LINEAR_OPERATIONS:
             return self._operator(
                 self.left.evaluate(*grid, **left_vals),
@@ -971,6 +1021,53 @@ class CompositeModel(Model):
 
         elif self.op_str == self.COMPOSITE_OPERATION:
             left_res = [self.left.evaluate(*grid, **left_vals)]
-            return self.right.evaluate(*left_res)
+            return self.right.evaluate(*left_res, *self.right.parameters_values)
 
         raise ValueError(f"Unknown operation: {self.op_str}")
+    
+    def print_tree(self, prefix: str = "", is_last: bool = True) -> None:
+        """
+        Stampa la struttura del CompositeModel in stile 'tree'.
+        `prefix` è la stringa di indentazione.
+        `is_last` indica se il nodo corrente è l'ultimo figlio del padre.
+        """
+
+        # Determina il simbolo di "ramo"
+        if prefix == "":
+            # Siamo alla radice: niente '|--' o '`--'
+            branch_symbol = ""
+        else:
+            branch_symbol = "`-- " if is_last else "|-- "
+
+        # Definisci l'etichetta del nodo. Se preferisci, usa anche self.name
+        node_label = f"Composite(op='{self.op_str}')"
+
+        # Stampa il nodo
+        print(f"{prefix}{branch_symbol}{node_label}")
+
+        # Calcola il prefisso per i figli
+        new_prefix = prefix + ("    " if is_last else "|   ")
+
+        # Costruisci la lista dei figli effettivi (possono essere 0, 1 o 2)
+        children = []
+        if self.left is not None:
+            children.append(self.left)
+        if self.right is not None:
+            children.append(self.right)
+
+        # Se non ci sono figli, interrompi (capita se left/right == None)
+        if not children:
+            return  # modello composito "monco" che non ha figli
+
+        # Altrimenti, itera sui figli
+        for i, child in enumerate(children):
+            # Verifica se è l'ultimo figlio
+            child_is_last = i == len(children) - 1
+
+            # Se il figlio è un CompositeModel, ricorsione
+            if isinstance(child, CompositeModel):
+                child.print_tree(prefix=new_prefix, is_last=child_is_last)
+            else:
+                # Se è un Model foglia, stampiamo semplicemente il suo nome
+                leaf_symbol = "`-- " if child_is_last else "|-- "
+                print(f"{new_prefix}{leaf_symbol}{child.name}")

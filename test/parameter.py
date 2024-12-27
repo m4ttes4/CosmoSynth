@@ -26,11 +26,13 @@ class Parameter:
         bounds (Tuple[float, float]): Limiti del parametro.
         description (str): Descrizione del parametro.
     
-    TODO: supporto a call esterne e alle unità (che diventa la nuoova description),
+    TODO: supporto a call esterne e alle unità (che diventa la nuova description),
         supporto a parametri con valori diversi da float?
         VectorParameter(Parameter)
         DictParameter(Parameter)
         FloatParameter = VectorParameter(dim=1) ?
+        
+    TODO: modificare self.name una volta dentro al handler modifica parameters_keys
     """
 
     def __init__(
@@ -40,6 +42,7 @@ class Parameter:
         frozen: bool = False,
         bounds: Tuple[float, float] = (-float("inf"), float("inf")),
         description: str = "",
+        handler: 'ParameterHandler' = None
     ) -> None:
         """
         Inizializza un nuovo parametro.
@@ -64,6 +67,12 @@ class Parameter:
         self._frozen = frozen
         self._bounds = bounds
         self._description = description
+        self._handler = handler
+        self._chached_properties = ['value','bounds','frozen']
+    
+    def _update_handler_cache(self):
+        if self._handler is not None:
+            self._handler._update_cache()
 
     @property
     def name(self) -> str:
@@ -88,6 +97,7 @@ class Parameter:
         """
         ParameterValidator.validate_name(new_name)
         self._name = new_name
+        self._update_handler_cache()
 
     @property
     def value(self) -> float:
@@ -117,6 +127,8 @@ class Parameter:
             return
         ParameterValidator.validate_value_in_bounds(new_value, self._bounds)
         self._value = new_value
+        self._update_handler_cache()
+        
 
     @property
     def bounds(self) -> Tuple[float, float]:
@@ -148,6 +160,7 @@ class Parameter:
         ParameterValidator.validate_bounds(new_bounds)
         ParameterValidator.validate_value_in_bounds(self._value, new_bounds)
         self._bounds = new_bounds
+        self._update_handler_cache()
 
     @property
     def frozen(self) -> bool:
@@ -172,6 +185,7 @@ class Parameter:
         """
         ParameterValidator.validate_frozen(is_true)
         self._frozen = is_true
+        self._update_handler_cache()
 
     @property
     def description(self) -> str:
@@ -389,6 +403,37 @@ class ParameterHandler:
         )
         self._cache = {}
         
+        self._cached_propreties = [
+            "parameters_names",
+            "parameters_values",
+            "parameters_bounds",
+            "parameters_keys",
+            "parameters_values_dict",
+            "binary_freeze_map",
+            "binary_melt_map",
+            "frozen_indeces",
+            "not_frozen_indeces",
+            "free_parameters",
+            "frozen_parameters",
+        ]  # list of attributes names that are cached
+        
+        self._cache_builders = {
+            "parameters_names": self._build_parameters_names,
+            "parameters_values": self._build_parameters_values,
+            "parameters_bounds": self._build_parameters_bounds,
+            "parameters_keys": self._build_parameters_keys,
+            "parameters_values_dict": self._build_parameters_values_dict,
+            "binary_freeze_map": self._build_binary_freeze_map,
+            "binary_melt_map": self._build_binary_melt_map,
+            "frozen_indeces": self._build_frozen_indeces,
+            "not_frozen_indeces": self._build_not_frozen_indeces,
+            "free_parameters": self._build_free_parameters,
+            "frozen_parameters":self._build_frozen_parameters
+        }
+        
+        assert len(self._cached_propreties) == len(self._cache_builders)
+        #self._update_cache()
+        
 
         if isinstance(parameters, Parameter):
             self.add_parameter(parameters)
@@ -407,30 +452,30 @@ class ParameterHandler:
         """
         Invalida la cache dei parametri.
         """
-        del self._cache
-        self._cache = {}
+        #del self._cache
+        self._cache.clear()
+    
+    @property
+    def cached_propreties(self):
+        return self._cached_propreties
 
-    def _update_cache(self, key=None, value=None) -> None:
+    '''def _update_cache(self, key=None, value=None) -> None:
         """aggiorna la cache dei parametri.
-
-        PARAMETRI CACHATI:
-        1- self.parameter_names
-        2- self.parameter_values
-        3- self.parameters_bounds
-        4- self.n_free_parameters
-
+        NOTE: perchè cache e non attributi? perchè mantengo tutto in un unica struttura dati
+        che posso gestire come voglio e ho tutto in unico blocco.
+        overhead hashmap è abbastanza piccolo da essere ignorato        
         """
-        keys = [
-            "parameters_names",
-            "parameters_values",
-            "parameters_bounds",
-            "parameters_keys",
-            "parameters_values_dict",
-            "binary_freeze_map",
-            "binary_melt_map",
-            "frozen_indeces",
-            "not_frozen_indeces",
-        ]
+        #keys = [
+        #    "parameters_names",
+        #    "parameters_values",
+        #    "parameters_bounds",
+        #    "parameters_keys",
+        #    "parameters_values_dict",
+        #    "binary_freeze_map",
+        #    "binary_melt_map",
+        #    "frozen_indeces",
+        #    "not_frozen_indeces",
+        #]
         
         if key is None and value is None:
             values = [
@@ -455,12 +500,92 @@ class ParameterHandler:
                     if self._binary_freeze_map[i] is False
                 ]
             ]
-            for k,v in zip(keys, values):
+            for k,v in zip(self.cached_propreties, values):
                 self._cache[k]=v
         else:
-            if key not in keys:
+            if key not in self.cached_propreties:
                 raise ValueError("Cache error")
-            self._cache[key] = value
+            self._cache[key] = value'''
+            
+    # ......................
+    #     UPDATE CACHE
+    # ......................
+    def _update_cache(self, key=None, value=None) -> None:
+        """
+        Aggiorna la cache dei parametri.
+        Se key e value sono None, ricostruisce tutto.
+        Altrimenti, aggiorna solo la chiave indicata.
+        """
+        if key is None and value is None:
+            # Aggiornamento completo: usa i builder per tutte le chiavi
+            for k in self._cached_propreties:
+                builder = self._cache_builders.get(k)
+                if builder is not None:
+                    self._cache[k] = builder()
+                else:
+                    raise ValueError(f"Nessun builder definito per la chiave: {k}")
+        else:
+            # Aggiornamento parziale
+            if key not in self._cached_propreties:
+                raise ValueError(
+                    f"La chiave '{key}' non è presente in cached_propreties."
+                )
+
+            # Se value non è None, vuol dire che l'utente specifica manualmente
+            # il valore. Altrimenti, se value è None, lo ricostruiamo noi (builder).
+            if value is not None:
+                self._cache[key] = value
+            else:
+                builder = self._cache_builders.get(key)
+                if builder is not None:
+                    self._cache[key] = builder()
+                else:
+                    raise ValueError(f"Nessun builder definito per la chiave: {key}")
+            
+    # ......................
+    #    METODI BUILDERS PER CACHE
+    # ......................
+    def _build_parameters_names(self) -> List[str]:
+        return [p.name for p in self]
+
+    def _build_parameters_values(self) -> List[float]:
+        return [p.value for p in self]
+
+    def _build_parameters_bounds(self) -> List[Tuple[float]]:
+        return [p.bounds for p in self]
+
+    def _build_parameters_keys(self):# -> list:
+        return list(self._parameters.keys())
+
+    def _build_parameters_values_dict(self) -> Dict[str, float]:
+        return {
+            key: val for key, val in zip(self.parameters_keys, self.parameters_values)
+        }
+
+    def _build_binary_freeze_map(self) -> List[bool]:
+        return [p.frozen for p in self]
+
+    def _build_binary_melt_map(self) -> List[bool]:
+        return [not p.frozen for p in self]
+
+    def _build_frozen_indeces(self) -> List[int]:
+        return [
+            i
+            for i in range(len(self._binary_freeze_map))
+            if self._binary_freeze_map[i] is True
+        ]
+
+    def _build_not_frozen_indeces(self) -> List[int]:
+        return [
+            i
+            for i in range(len(self._binary_freeze_map))
+            if self._binary_freeze_map[i] is False
+        ]
+    def _build_free_parameters(self) -> List[Parameter]:
+        return [p for p in self if p.frozen is False]
+    
+    def _build_frozen_parameters(self) -> List[Parameter]:
+        return [p for p in self if p.frozen is True]
 
     @property
     def is_inside_model(self) -> bool:
@@ -492,7 +617,7 @@ class ParameterHandler:
         Returns:
             List[float]: Lista dei valori dei parametri.
         """
-        return self._cache.get("parameters_values", [p.value for p in self])
+        return self._cache.get("parameters_values", self._build_parameters_values())#[p.value for p in self])
         #if "parameters_values" in self._cache:
         #    return self._cache["parameters_values"]
         #else:
@@ -506,7 +631,7 @@ class ParameterHandler:
         Returns:
             List[str]: Lista dei nomi dei parametri.
         """
-        return self._cache.get("parameters_names", [p.name for p in self])
+        return self._cache.get("parameters_names", self._build_parameters_names())#[p.name for p in self])
         #if "parameters_names" in self._cache:
         #    return self._cache["parameters_names"]
         #else:
@@ -520,7 +645,7 @@ class ParameterHandler:
         Returns:
             List[str]: Lista dei nomi dei parametri.
         """
-        return self._cache.get("parameters_keys", [p for p in self._parameters.keys()])
+        return self._cache.get("parameters_keys", self._build_parameters_keys())#[p for p in self._parameters.keys()])
         #if "parameters_keys" in self._cache:
         #    return self._cache["parameters_keys"]
         #else:
@@ -536,13 +661,12 @@ class ParameterHandler:
         Returns:
             List[str]: Lista dei nomi dei parametri.
         """
-        return self._cache.get(
-            "parameters_values_dict",
-            {
-                key: val
-                for key, val in zip(self.parameters_keys, self.parameters_values)
-            },
-        )
+        return self._cache.get("parameters_values_dict", self._build_parameters_values_dict())
+            #{
+            #    key: val
+            #    for key, val in zip(self.parameters_keys, self.parameters_values)
+            #},
+        #)
         #if "parameters_values_dict" in self._cache:
         #    return self._cache["parameters_values_dict"]
         #return {
@@ -557,7 +681,7 @@ class ParameterHandler:
         Returns:
             List[Tuple[float, float]]: Lista dei limiti dei parametri.
         """
-        return self._cache.get("parameters_bounds", [p.bounds for p in self])
+        return self._cache.get("parameters_bounds", self._build_parameters_bounds())#[p.bounds for p in self])
         #return [p.bounds for p in self]
 
     @property
@@ -578,10 +702,11 @@ class ParameterHandler:
         Returns:
             List[Parameter]: Lista dei parametri liberi.
         """
+        return self._cache.get("free_parameters", self._build_free_parameters())
         #return self._cache.get('free_parameters', )
-        if "free_parameters" not in self._cache:
-            self._cache["free_parameters"] = [p for p in self if not p.frozen]
-        return self._cache["free_parameters"]
+        #if "free_parameters" not in self._cache:
+        #    self._cache["free_parameters"] = [p for p in self if not p.frozen]
+        #return self._cache["free_parameters"]
 
     @property
     def frozen_parameters(self) -> List["Parameter"]:
@@ -591,14 +716,16 @@ class ParameterHandler:
         Returns:
             List[Parameter]: Lista dei parametri congelati.
         """
-        if "frozen_parameters" not in self._cache:
-            self._cache["frozen_parameters"] = [p for p in self if p.frozen]
-        return self._cache["frozen_parameters"]
+        return self._cache.get("frozen_parameters", self._build_frozen_parameters())
+        #if "frozen_parameters" not in self._cache:
+        #    self._cache["frozen_parameters"] = [p for p in self if p.frozen]
+        #return self._cache["frozen_parameters"]
     
     @property
     def _binary_freeze_map(self) -> List[bool]:
         # possibile da cachare
-        return self._cache.get("binary_freeze_map", [p.frozen for p in self])
+        return self._cache.get("binary_freeze_map", self._build_binary_freeze_map())
+                               #[p.frozen for p in self])
         #if "binary_freeze_map" in self._cache:
         #    return self._cache["binary_freeze_map"]
         #return [p.frozen for p in self]
@@ -606,7 +733,8 @@ class ParameterHandler:
     @property
     def _binary_melt_map(self) -> List[bool]:
         # possibile da cachare
-        return self._cache.get("binary_melt_map", [not p.frozen for p in self])
+        return self._cache.get("binary_melt_map", self._build_binary_melt_map())
+    #[not p.frozen for p in self])
         #if "binary_melt_map" in self._cache:
         #    return self._cache["binary_melt_map"]
         #return [not p.frozen for p in self]
@@ -614,13 +742,13 @@ class ParameterHandler:
     @property
     def not_frozen_indeces(self):
         return self._cache.get(
-            "not_frozen_indeces",
-            [
-                i
-                for i in range(len(self._binary_freeze_map))
-                if self._binary_freeze_map[i] is False
-            ],
-        )
+            "not_frozen_indeces", self._build_not_frozen_indeces())
+        #    [
+        #        i
+        #        for i in range(len(self._binary_freeze_map))
+        #        if self._binary_freeze_map[i] is False
+        #    ],
+        #)
         #if "not_frozen_indeces" in self._cache:
         # #   return self._cache["not_frozen_indeces"]
         #return [
@@ -632,15 +760,15 @@ class ParameterHandler:
     @property
     def frozen_indeces(self):
         return self._cache.get(
-            "frozen_indeces",
-            [
-                [
-                    i
-                    for i in range(len(self._binary_freeze_map))
-                    if self._binary_freeze_map[i] is True
-                ]
-            ],
-        )
+            "frozen_indeces", self._build_frozen_indeces())
+        #    [
+        #        [
+        #            i
+        #            for i in range(len(self._binary_freeze_map))
+        #            if self._binary_freeze_map[i] is True
+        #        ]
+        #    ],
+        #)
         #if "frozen_indeces" in self._cache:
         #    return self._cache["frozen_indeces"]
         #return [
@@ -798,6 +926,7 @@ class ParameterHandler:
         #    name = parameter.name
 
         self._parameters[name] = parameter
+        parameter._handler = self
         # self.parameter_map[parameter.name] = parameter.name
 
         # self._invalidate_cache()
@@ -815,10 +944,10 @@ class ParameterHandler:
         Raises:
             KeyError: Se il parametro non è trovato.
         """
-        try:
-            return self._parameters[name]
-        except KeyError:
-            raise KeyError(f"Parameter '{name}' not found.")
+        #try:
+        return self._parameters[name]
+        #except KeyError:
+        #    raise KeyError(f"Parameter '{name}' not found.")
 
     def __setitem__(self, key: str, value: "Parameter") -> None:
         """
@@ -839,7 +968,7 @@ class ParameterHandler:
         #    raise TypeError(
         #        f"New parameter must be instance of Parameter, not {type(value)}"
         #    )
-        if key not in self._parameters and self._is_inside_model:
+        if key not in self and self._is_inside_model:
             raise ValueError(
                 f"Parameter {key} does not exists in function call please Write a new function call or build a composite model"
             )
