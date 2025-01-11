@@ -324,6 +324,9 @@ class Parameter:
         buffer.write(table + "\n")
 
         return buffer.getvalue()
+    
+    def __call__(self, value):
+        return self.prior(value)
 
 
 class ParameterValidator:

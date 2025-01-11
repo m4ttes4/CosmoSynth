@@ -312,11 +312,12 @@ class MCMC:
         float
             Il valore della log-prior.
         """
+        return sum(param(val) for param, val in zip(self.model.free_parameters, theta))
         # Controlla se ogni parametro è all'interno dei suoi bounds
-        for param, val in zip(self.model.free_parameters, theta):
+        #for param, val in zip(self.model.free_parameters, theta):
             #if val < param.bounds[0] or val > param.bounds[1]:
             #    return -np.inf
-            return param(val)
+        #    if param(val)
 
     def loglike(
         self,

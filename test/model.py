@@ -20,7 +20,6 @@ def componemodels(op, **kwargs):
     return lambda left, right: CompositeModel(left, right, op, **kwargs)
 
 class Model:
-    '''BUG se cambio nome di parametro mode[param].name = new_name, rompo le evaluation di funzione'''
    
     _name = "SimpleModel"
     _parameters = ParameterHandler()
@@ -44,6 +43,7 @@ class Model:
         self._name = name
         self._grid_variables = []  # Inizializza _grid_variables nel costruttore
         #self._cache = {}  # cache base
+        
 
     def _update_cache(self, key, value) -> None:
         '''TODO: odio come ho implementato la cache,
@@ -337,7 +337,7 @@ class Model:
         return list(params.keys()), list(params.values()), is_constant
 
     @classmethod
-    def wrap(cls, func, grid_variables=None, params=None, ndim=None, noutputs=1, default_values=1.0, initial_values:dict|None = None, name='SimpleModel'):
+    def wrap(cls, func, grid_variables=None, params=None, ndim=None, noutputs=1, default_values=1.0, initial_values:dict|None = None, param_option:dict=None, name='SimpleModel'):
         """
         Wrap a given function and create a model class instance with specified parameters and grid variables.
 
@@ -381,7 +381,6 @@ class Model:
 
         # Extract the parameter names, values, and frozen status from the function
         names, values, frozen = cls._extract_params(func, default_values)
-
         # Check that we have at least one between params and grid_variables
         if params is None and grid_variables is None:
             _grid = []
@@ -454,11 +453,30 @@ class Model:
                     parameters[pname].value = pval
                 else:
                     warnings.warn(f'parameter name {pname} is not a parameter for the model')
-                 
+        
+        
+        # update with param options
+        if param_option is not None:
+            if not isinstance(param_option, dict):
+                raise TypeError('Param Options must be istance of Dict')
+            option_keys = ['prior', 'value', 'frozen','description','bounds']
+            
+            for key in param_option.keys():
+                if key in parameters:
+                    # loop over possible options
+                    for option in option_keys:
+                        if option in param_option[key]:
+                            parameters[key][option] = param_option[key][option]
+            
         parameters._is_inside_model = True
         parameters._update_cache()
         new_cls = cls(func, parameters, _n_dims, _n_inputs, _n_outputs, name)
         new_cls._grid_variables = _grid
+        new_cls._tmp_dict = OrderedDict()
+        for call_kwarg in names:
+            new_cls._tmp_dict[call_kwarg] = 0
+        # Ord dict per zippare gli args nelle giuste kwargs
+        #{call_kwarg:1 for call_kwarg in names}
         return new_cls
 
 
@@ -610,20 +628,18 @@ class Model:
         
     def __call__(self, *args, **kwargs):
         '''
-        TODO: modificare la __call__ per renderla più flessibile e veloce
+        Si aspetta che la griglia sia fornita come i primi args, altrimenti 
+        deve essere data rta i kwargs
         '''
         
-        tmp = self.parameters_values_dict
-        if kwargs:
-            for key in kwargs:
-                if self[key].frozen:
-                    warnings.warn(
-                        f"Parameter {key} is frozen, new value will be ignored"
-                    )
-                else:
-                    tmp[key] = kwargs[key]
+        for i, grid_name in enumerate(self.grid_variables):
+            if grid_name not in kwargs:
+                self._tmp_dict[grid_name] = args[i]
+                
+        self._tmp_dict.update(**self.parameters_values_dict)
+        self._tmp_dict.update(**kwargs)
 
-        return self._callable(*args, **tmp)
+        return self._callable(**self._tmp_dict)
 
     def __getitem__(self, name: str) -> Parameter:
         return self.parameters[name]
@@ -687,6 +703,10 @@ class CompositeModel(Model):
         self._n_dim, self._n_inputs, self._n_outputs = self._update_n_dim()
         self._parameters = self._init_parameters()
         self.submodels = self._collect_submodels()
+        #self._tmp_dict = OrderedDict()
+        #for grid_kwarg in self.left.grid_variables:
+        #    self._tmp_dict[grid_kwarg] = 0.0
+        #self._tmp_dict.update(**self.parameters_values_dict)
         #self._cache = {}
 
     @property
@@ -881,7 +901,9 @@ class CompositeModel(Model):
         # Combina le informazioni generali con la tabella
         return model_info + table
     
-
+    
+    
+    
     def evaluate(self, *args, **kwargs):
         """
         Valuta il modello composito utilizzando i valori forniti come input.
@@ -1002,7 +1024,8 @@ class CompositeModel(Model):
 
         raise ValueError(f"Unknown operation: {self.op_str}")
 
-
+    
+    
     def __call__(self, *args, **kwargs):
         """
         Chiama il modello composito come fosse una funzione.
@@ -1026,7 +1049,14 @@ class CompositeModel(Model):
         Returns:
             Il risultato della funzione combinata `left` e `right` secondo l'operatore `op_str`.
         """
-        grid = args[: len(self.grid_variables)]
+        grid = []
+        for i,grid_name in enumerate(self.grid_variables):
+            if grid_name not in kwargs:
+                grid.append(args[i])
+            else:
+                grid.append(kwargs.pop(grid_name))
+        #grid = args[: len(self.grid_variables)]
+        
         tmp = self.parameters_values_dict
 
         if kwargs:
@@ -1035,10 +1065,10 @@ class CompositeModel(Model):
                     warnings.warn(f"Parameter {key} is frozen, new value will be ignored")
                 else:
                     tmp[key] = kwargs[key]
-
+        
         # Pre-calcola i valori di tmp una volta sola
         tmp_values = list(tmp.values())
-        #print(tmp_values)
+        
         # Suddividi i parametri tra left e right
         
             
@@ -1050,6 +1080,7 @@ class CompositeModel(Model):
             )
         }
         
+        
         if self.op_str in self.LINEAR_OPERATIONS:
             
             return self._operator(
@@ -1059,9 +1090,7 @@ class CompositeModel(Model):
 
         elif self.op_str == self.COMPOSITE_OPERATION:
             left_res = self.left.evaluate(*grid, **left_vals)
-            #print(left_res)
-            #print(left_vals)
-            #print(right_vals)
+            
             if isinstance(left_res, tuple):                
                 return self.right.evaluate(*left_res, **right_vals)
             else:
