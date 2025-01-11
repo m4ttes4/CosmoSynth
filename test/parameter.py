@@ -5,8 +5,12 @@ import warnings
 from typing import Iterable
 from io import StringIO
 from copy import deepcopy
+from tabulate import tabulate
+#from priors import Prior, UniformPrior
+#from typing import TYPE_CHECKING
 
-
+#if TYPE_CHECKING:
+from priors import Prior, UniformPrior
 
 
 
@@ -31,8 +35,12 @@ class Parameter:
         VectorParameter(Parameter)
         DictParameter(Parameter)
         FloatParameter = VectorParameter(dim=1) ?
+        Implementazione dei Prior
+        Supporto ai constrain
         
-    TODO: modificare self.name una volta dentro al handler modifica parameters_keys
+    TODO: [ok] modificare self.name una volta dentro al handler modifica parameters_keys
+    
+    NOTE: Bounds legacy rimangono per linear opt. con scipy siccome i prior non sono supportati
     """
 
     def __init__(
@@ -42,6 +50,7 @@ class Parameter:
         frozen: bool = False,
         bounds: Tuple[float, float] = (-float("inf"), float("inf")),
         description: str = "",
+        prior:Prior = None,
         handler: 'ParameterHandler' = None
     ) -> None:
         """
@@ -69,11 +78,26 @@ class Parameter:
         self._description = description
         self._handler = handler
         self._chached_properties = ['value','bounds','frozen']
+        
+        if prior is None:
+            self._prior = UniformPrior(-float('inf'), float('inf'))
+        else:
+            self._prior = prior
     
     def _update_handler_cache(self):
         if self._handler is not None:
             self._handler._update_cache()
 
+    @property
+    def prior(self):
+        return self._prior
+    
+    @prior.setter
+    def prior(self, value) -> None:
+        ParameterValidator.validate_prior(value)
+        self._prior = value
+        
+    
     @property
     def name(self) -> str:
         """
@@ -271,17 +295,33 @@ class Parameter:
             str: Rappresentazione testuale del parametro.
         """
         
-
         buffer = StringIO()
-        buffer.write(f"PARAM NAME: {self.name}\n")
-        buffer.write("-" * 60 + "\n")
-        buffer.write(f"{'NAME':<15} {'VALUE':<10} {'FROZEN':<10} {'BOUNDS':<20} {'DESCR:'} \n")
-        buffer.write("-" * 60 + "\n")
 
+        buffer.write(f"PARAM NAME: {self.name}\n")
+
+        # Definizione delle intestazioni
+        field_names = ["NAME", "VALUE", "FROZEN", "PRIOR", "DESCR:"]
+
+        # Preparazione dei dati
         value_str = f"{self._value:.5g}"
-        bounds_str = f"({self._bounds[0]:.5g}, {self._bounds[1]:.5g})"
         froz_str = "Yes" if self.frozen else "No"
-        buffer.write(f"{self.name:<15} {value_str:<10} {[froz_str][0]:<10} {bounds_str:<20} {self.description:<20} \n")
+        prior_str = self.prior._get_str()
+
+        # Creazione della tabella con una lista di righe
+        table_data = [[self.name, value_str, froz_str, prior_str, self.description]]
+
+        # Creazione della tabella con tabulate
+        table = tabulate(
+            table_data,
+            headers=field_names,
+            tablefmt="plain",
+            showindex="always",
+            colalign=("left",),
+            #floatfmt=".3f",
+        )
+
+        # Aggiungiamo la tabella al buffer
+        buffer.write(table + "\n")
 
         return buffer.getvalue()
 
@@ -290,6 +330,11 @@ class ParameterValidator:
     """
     Classe per la gestione della validazione di parametri singoli.
     """
+    
+    @staticmethod
+    def validate_prior(prior: Prior) -> None:
+        if not isinstance(prior, Prior):
+            raise TypeError('Pior Must be istance of class Prior')
 
     @staticmethod
     def validate_name(name: str) -> None:
@@ -1006,8 +1051,43 @@ class ParameterHandler:
             int: Numero di parametri.
         """
         return len(self._parameters)
-
+    
     def __str__(self) -> str:
+        """
+        Ritorna una rappresentazione in formato tabella dei parametri gestiti.
+
+        Returns:
+            str: Tabella che mostra nome, valore, bounds e stato frozen dei parametri.
+        """
+        
+        # Definizione delle intestazioni
+        field_names = ["NAME", "VALUE", "PRIOR", "FROZEN", "DESCR"]
+
+        # Preparazione dei dati
+        table_data = []
+        for i, param in enumerate(self):
+            name = self.parameters_names[i]
+            value = str(param.value) if param.value is not None else "None"
+            #bounds = str(param.bounds) if param.bounds is not None else "None"
+            prior_str = param.prior._get_str()
+            frozen = "Yes" if param.frozen else "No"
+
+            # Aggiungiamo la riga dei dati
+            table_data.append([name, value, prior_str, frozen, param.description])
+
+        # Creazione della tabella con tabulate
+        table = tabulate(
+            table_data,
+            headers=field_names,
+            tablefmt="plain",
+            showindex="always",
+            colalign=("left",),
+        )
+
+        # Ritorniamo la tabella
+        return table
+
+    '''def __str__(self) -> str:
         """
         Ritorna una rappresentazione in formato tabella dei parametri gestiti.
 
@@ -1030,7 +1110,7 @@ class ParameterHandler:
             buffer.write(f"{name:<10} {value:<10} {bounds:<15} {frozen:<10}\n")
 
         # Ritorniamo il contenuto del buffer
-        return buffer.getvalue()
+        return buffer.getvalue()'''
 
     def items(self):
         """

@@ -314,9 +314,9 @@ class MCMC:
         """
         # Controlla se ogni parametro è all'interno dei suoi bounds
         for param, val in zip(self.model.free_parameters, theta):
-            if val < param.bounds[0] or val > param.bounds[1]:
-                return -np.inf
-        return 0.0
+            #if val < param.bounds[0] or val > param.bounds[1]:
+            #    return -np.inf
+            return param(val)
 
     def loglike(
         self,

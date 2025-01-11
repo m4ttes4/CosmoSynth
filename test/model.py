@@ -3,10 +3,11 @@ from copy import deepcopy
 import warnings
 from parameter import Parameter, ParameterHandler
 from typing import Callable, List,  Tuple
-from io import StringIO
+#from io import StringIO
 from collections  import OrderedDict
 from itertools import islice
 import operator
+from tabulate import tabulate
 
 '''
 TODO: nuova gestione delle chiamate
@@ -471,45 +472,37 @@ class Model:
         Returns:
             str: Una stringa che rappresenta il modello.
         """
-    
-        buffer = StringIO()
-        
-        # Scrittura delle informazioni generali
-        buffer.write(f"MODEL NAME: {self.name} \n")
-        buffer.write(f"FREE PARAMS: {self.n_free_parameters}\n")
-        buffer.write(f"GRID VARIABLES: {self.grid_variables}\n")
-        buffer.write(f"N-DIM: {self.n_dim}\n")
-        buffer.write("-" * 100 + "\n")
-        
-        # Intestazione (header) con larghezze fisse
-        # Regola i valori <5, <15, <10, ecc. in base alle tue esigenze di formattazione
-        buffer.write(
-            f"{'':<5}"       # Spazio per l'indice
-            f"{'NAME':<20}"  # Nome del parametro
-            f"{'VALUE':<15}" # Valore
-            f"{'IS-FROZEN':<20}"
-            f"{'BOUNDS':<20}"
-            f"{'DESCR.':<20}\n"
+        # Informazioni generali sul modello
+        model_info = (
+            f"MODEL NAME: {self.name}\n"
+            f"FREE PARAMS: {self.n_free_parameters}\n"
+            f"GRID VARIABLES: {self.grid_variables}\n"
+            f"N-DIM: {self.n_dim}\n"
+            + "-" * 100 + "\n"
         )
-        buffer.write("-" * 100 + "\n")
-        
-        # Scrittura dei parametri con la stessa formattazione
+
+        # Creazione dei dati per la tabella
+        field_names = ["INDEX", "NAME", "VALUE", "FROZEN", "PRIOR", "DESCR"]
+        table_data = []
+
         for i, param in enumerate(self._parameters):
-            
-            value_str = f"{param.value:.2f}"
-            bounds_str = f"({param.bounds[0]:.2f}, {param.bounds[1]:.2f})"
+            value_str = f"{param.value:.2f}" if param.value is not None else "None"
+            #bounds_str = (
+            #    f"({param.bounds[0]:.2f}, {param.bounds[1]:.2f})"
+            #    if param.bounds is not None
+            #    else "None"
+            #)
+            prior_str = param.prior._get_str()
             frz = "Yes" if param.frozen else "No"
-            
-            buffer.write(
-                f"{i:<{5}}"                # indice
-                f"{param.name:{25}}"      # nome del parametro
-                f"{value_str:<{25 }}"       # valore
-                f"{frz:<{25 }}"             # is-frozen
-                f"{bounds_str:<{20 }}"      # bounds
-                f"{param.description:<20}\n"  # descrizione
-            )
-            
-        return buffer.getvalue()
+
+            # Aggiungiamo i dati del parametro come riga
+            table_data.append([i, param.name, value_str, frz, prior_str, param.description])
+
+        # Creazione della tabella
+        table = tabulate(table_data, headers=field_names, tablefmt="plain")
+
+        # Combina le informazioni generali con la tabella
+        return model_info + table
 
     
 
@@ -646,7 +639,8 @@ class Model:
 
     def __len__(self) -> int:
         return self.parameters.__len__()
-
+    
+    
     def copy(self):
         return deepcopy(self)
 
@@ -656,6 +650,8 @@ class Model:
     __truediv__ = componemodels("/")
     __sub__ = componemodels("-")
     __pow__ = componemodels("**") 
+    
+    # PRIOR LOGIC, should not be used for simple models
     
     
 
@@ -843,6 +839,7 @@ class CompositeModel(Model):
         parameters._is_inside_model = True
         return parameters
 
+
     def __str__(self):
         """
         Restituisce una stringa che rappresenta il modello composito e i suoi parametri.
@@ -850,29 +847,40 @@ class CompositeModel(Model):
         Returns:
             str: Una stringa che rappresenta il modello composito, i modelli contenuti e i parametri liberi.
         """
-        buffer = StringIO()
+        # Informazioni generali del modello composito
+        model_info = (
+            f"COMPOSITE MODEL NAME: {self.name}\n"
+            f"CONTAINED MODELS: {', '.join(self.submodels)}\n"
+            f"GRID VARIABLES: {self.grid_variables}\n"
+            f"LOGIC: {self.composite_structure()}\n"
+            f"FREE PARAMS: {self.n_free_parameters}\n" + "-" * 60 + "\n"
+        )
 
-        # Scrivi le informazioni generali del modello
-        buffer.write(f"COMPOSITE MODEL NAME: {self.name} \n")
-        buffer.write(f"CONTAINED MODELS: {self.submodels}\n")
-        buffer.write(f"GRID VARIABLES: {self.grid_variables}\n")
-        buffer.write(f"LOGIC: {self.composite_structure()}\n")
-        buffer.write(f"FREE PARAMS: {self.n_free_parameters}\n")
-        buffer.write("-" * 60 + "\n")
-        buffer.write(f"{'':<4} {'NAME':<15} {'VALUE':<10} {'IS-FROZEN':<10} {'BOUNDS':<20} {'DESCR.':<10}\n")
-        buffer.write("-" * 60 + "\n")
+        # Creazione dei dati per la tabella
+        field_names = ["INDEX", "NAME", "VALUE", "FROZEN", "PRIOR", "DESCR"]
+        table_data = []
 
-        # Scrivi i dettagli dei parametri
         for i, (param_name, param) in enumerate(self.parameters.items()):
-            value_str = f"{param.value:.2f}"
-            bounds_str = f"({param.bounds[0]:.2f}, {param.bounds[1]:.2f})"
+            value_str = f"{param.value:.2f}" if param.value is not None else "None"
+            #bounds_str = (
+            #    f"({param.bounds[0]:.2f}, {param.bounds[1]:.2f})"
+            #    if param.bounds is not None
+            #    else "None"
+            #)
+            prior_str = param.prior._get_str()
             frz = "Yes" if param.frozen else "No"
-            buffer.write(
-                f"{i:<4} {param_name:<15} {value_str:<10} {frz:<10} {bounds_str:<20} {param.description:<10}\n"
+
+            # Aggiungiamo i dati del parametro come riga
+            table_data.append(
+                [i, param_name, value_str, frz, prior_str, param.description]
             )
 
-        # Ritorna il contenuto del buffer
-        return buffer.getvalue()
+        # Creazione della tabella
+        table = tabulate(table_data, headers=field_names, tablefmt="plain")
+
+        # Combina le informazioni generali con la tabella
+        return model_info + table
+    
 
     def evaluate(self, *args, **kwargs):
         """
