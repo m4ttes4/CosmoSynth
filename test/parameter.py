@@ -275,7 +275,7 @@ class Parameter:
         buffer = StringIO()
         buffer.write(f"PARAM NAME: {self.name}\n")
         buffer.write("-" * 60 + "\n")
-        buffer.write(f"{'NAME':<15} {'VALUE':<10} {'FROZEN':<10} {'BOUNDS':<20}  \n")
+        buffer.write(f"{'NAME':<15} {'VALUE':<10} {'FROZEN':<10} {'BOUNDS':<20} {'DESCR:'} \n")
         buffer.write("-" * 60 + "\n")
 
         value_str = f"{self._value:.5g}"

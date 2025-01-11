@@ -471,6 +471,7 @@ class Model:
         Returns:
             str: Una stringa che rappresenta il modello.
         """
+    
         buffer = StringIO()
         
         # Scrittura delle informazioni generali
@@ -478,18 +479,38 @@ class Model:
         buffer.write(f"FREE PARAMS: {self.n_free_parameters}\n")
         buffer.write(f"GRID VARIABLES: {self.grid_variables}\n")
         buffer.write(f"N-DIM: {self.n_dim}\n")
-        buffer.write("-" * 60 + "\n")
-        buffer.write(f"{'':<4} {'NAME':<15} {'VALUE':<10} {'IS-FROZEN':<10} {'BOUNDS':<20}\n")
-        buffer.write("-" * 60 + "\n")
+        buffer.write("-" * 100 + "\n")
         
-        # Scrittura dei parametri
+        # Intestazione (header) con larghezze fisse
+        # Regola i valori <5, <15, <10, ecc. in base alle tue esigenze di formattazione
+        buffer.write(
+            f"{'':<5}"       # Spazio per l'indice
+            f"{'NAME':<20}"  # Nome del parametro
+            f"{'VALUE':<15}" # Valore
+            f"{'IS-FROZEN':<20}"
+            f"{'BOUNDS':<20}"
+            f"{'DESCR.':<20}\n"
+        )
+        buffer.write("-" * 100 + "\n")
+        
+        # Scrittura dei parametri con la stessa formattazione
         for i, param in enumerate(self._parameters):
+            
             value_str = f"{param.value:.2f}"
             bounds_str = f"({param.bounds[0]:.2f}, {param.bounds[1]:.2f})"
             frz = "Yes" if param.frozen else "No"
-            buffer.write(f"{i:<4} {param.name:<15} {value_str:<10} {frz:<10} {bounds_str:<20}\n")
-        
+            
+            buffer.write(
+                f"{i:<{5}}"                # indice
+                f"{param.name:{25}}"      # nome del parametro
+                f"{value_str:<{25 }}"       # valore
+                f"{frz:<{25 }}"             # is-frozen
+                f"{bounds_str:<{20 }}"      # bounds
+                f"{param.description:<20}\n"  # descrizione
+            )
+            
         return buffer.getvalue()
+
     
 
     def evaluate(self, *args, **kwargs):
@@ -838,7 +859,7 @@ class CompositeModel(Model):
         buffer.write(f"LOGIC: {self.composite_structure()}\n")
         buffer.write(f"FREE PARAMS: {self.n_free_parameters}\n")
         buffer.write("-" * 60 + "\n")
-        buffer.write(f"{'':<4} {'NAME':<15} {'VALUE':<10} {'IS-FROZEN':<10} {'BOUNDS':<20} \n")
+        buffer.write(f"{'':<4} {'NAME':<15} {'VALUE':<10} {'IS-FROZEN':<10} {'BOUNDS':<20} {'DESCR.':<10}\n")
         buffer.write("-" * 60 + "\n")
 
         # Scrivi i dettagli dei parametri
@@ -847,7 +868,7 @@ class CompositeModel(Model):
             bounds_str = f"({param.bounds[0]:.2f}, {param.bounds[1]:.2f})"
             frz = "Yes" if param.frozen else "No"
             buffer.write(
-                f"{i:<4} {param_name:<15} {value_str:<10} {frz:<10} {bounds_str:<20}\n"
+                f"{i:<4} {param_name:<15} {value_str:<10} {frz:<10} {bounds_str:<20} {param.description:<10}\n"
             )
 
         # Ritorna il contenuto del buffer
@@ -875,7 +896,9 @@ class CompositeModel(Model):
         """
         # Costruzione della griglia e del dizionario dei parametri
         grid = args[: len(self.grid_variables)]
-        tmp = {**self.parameters_values_dict, **kwargs}
+        #tmp = {**self.parameters_values_dict, **kwargs}
+        tmp = {key:val for key,val in zip(self.parameters_keys, args[len(grid):])}
+        tmp.update(**kwargs)
 
         # Prepara gli iteratori per dividere i parametri tra left e right
         tmp_values = iter(tmp.values())
@@ -894,8 +917,11 @@ class CompositeModel(Model):
 
         # Se l'operatore è composito
         elif self.op_str == self.COMPOSITE_OPERATION:
-            left_res = [self.left.evaluate(*grid, **left_vals)]
-            return self.right.evaluate(*grid, *left_res)
+            left_res = self.left.evaluate(*grid, **left_vals)
+            if isinstance(left_res, tuple):
+                return self.right.evaluate(*left_res, **right_vals)
+            else:
+                return self.right.evaluate(left_res, **right_vals)
 
         # Operatore sconosciuto
         raise ValueError(f"Unknown operation: {self.op_str}")
@@ -960,9 +986,11 @@ class CompositeModel(Model):
             )
 
         elif self.op_str == self.COMPOSITE_OPERATION:
-            left_res = [self.left.evaluate(*grid, **left)]
-            
-            return self.right.evaluate(*left_res, *self.right.parameters_values)
+            left_res = self.left.evaluate(*grid, **left)
+            if isinstance(left_res, tuple):            
+                return self.right.evaluate(*left_res, **right)
+            else:
+                return self.right.evaluate(left_res, **right)
 
         raise ValueError(f"Unknown operation: {self.op_str}")
 
@@ -1002,26 +1030,34 @@ class CompositeModel(Model):
 
         # Pre-calcola i valori di tmp una volta sola
         tmp_values = list(tmp.values())
-
+        #print(tmp_values)
         # Suddividi i parametri tra left e right
+        
+            
         left_vals = {key: val for key, val in zip(self.left.parameters_keys, tmp_values)}
         right_vals = {
             key: val
             for key, val in zip(
-                self.right.parameters_keys, tmp_values[self.left.n_inputs -1:]
+                self.right.parameters_keys, tmp_values[len(self.left.parameters_keys):]
             )
         }
-        #print(left_vals)
-        #print(right_vals)
+        
         if self.op_str in self.LINEAR_OPERATIONS:
+            
             return self._operator(
                 self.left.evaluate(*grid, **left_vals),
                 self.right.evaluate(*grid, **right_vals),
             )
 
         elif self.op_str == self.COMPOSITE_OPERATION:
-            left_res = [self.left.evaluate(*grid, **left_vals)]
-            return self.right.evaluate(*left_res, *self.right.parameters_values)
+            left_res = self.left.evaluate(*grid, **left_vals)
+            #print(left_res)
+            #print(left_vals)
+            #print(right_vals)
+            if isinstance(left_res, tuple):                
+                return self.right.evaluate(*left_res, **right_vals)
+            else:
+                return self.right.evaluate(left_res, **right_vals)
 
         raise ValueError(f"Unknown operation: {self.op_str}")
     
