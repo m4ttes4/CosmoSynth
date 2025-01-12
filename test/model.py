@@ -5,7 +5,7 @@ from parameter import Parameter, ParameterHandler
 from typing import Callable, List,  Tuple
 #from io import StringIO
 from collections  import OrderedDict
-from itertools import islice
+#from itertools import islice
 import operator
 from tabulate import tabulate
 
@@ -565,7 +565,7 @@ class Model:
         return final_kwargs
 
 
-    def call(self, grid, *args, **kwargs):
+    def call(self, grid, *args):
         """
         Chiama la funzione `_callable` in un contesto di ottimizzazione:
         - `grid`: variabili di griglia passate come argomenti posizionali.
@@ -661,7 +661,9 @@ class CompositeModel(Model):
         self._operator = self.map_operator(op)
 
         self._n_dim, self._n_inputs, self._n_outputs = self._update_n_dim()
-        self._parameters = self._init_parameters()
+        self._parameters, self._left_kwarg_map, self._right_kwarg_map = (
+            self._init_parameters()
+        )
         self.submodels = self._collect_submodels()
         #self._tmp_dict = OrderedDict()
         #for grid_kwarg in self.left.grid_variables:
@@ -791,6 +793,8 @@ class CompositeModel(Model):
 
         structure, _ = helper(self, 0)
         return structure
+    
+    
 
     def _init_parameters(self) -> ParameterHandler:
         """Crea un Nuovo ParameterHandler con i nomi cambiati dei parametri ma mappati
@@ -798,6 +802,7 @@ class CompositeModel(Model):
         """
 
         parameters = ParameterHandler()
+        kwargs_map = OrderedDict()
         n = 0
 
         def dfs(node):
@@ -806,10 +811,11 @@ class CompositeModel(Model):
                 return
 
             if not node.left and not node.right:
-                for param in node:
+                for (param,key) in zip(node, node.parameters_keys):
                     name = param.name + f"_{n}"
 
                     parameters.add_parameter(param, name=name)
+                    kwargs_map[name] = key
                 n += 1
 
             dfs(node.left)
@@ -817,7 +823,24 @@ class CompositeModel(Model):
 
         dfs(self)
         parameters._is_inside_model = True
-        return parameters
+        
+        # Slice per dividere i parametri tra left e right
+        #num_left_params = len(self.left.parameters_keys)
+        #left_kwargs = OrderedDict(
+        #    list(kwargs_map.items())[:num_left_params]
+        #)
+        #right_kwargs = OrderedDict(
+        #    list(kwargs_map.items())[num_left_params:]
+        #)
+        left_kwargs = OrderedDict()
+        right_kwargs = OrderedDict()
+        
+        for key,val in zip(list(kwargs_map.keys()), self.left.parameters_keys):
+            left_kwargs[key] = val
+        for key, val in zip(list(kwargs_map.keys())[self.left.n_parameters:], self.right.parameters_keys):
+            right_kwargs[key] = val
+        
+        return parameters, left_kwargs, right_kwargs
 
 
     def __str__(self):
@@ -862,20 +885,173 @@ class CompositeModel(Model):
         return model_info + table
     
     
-    def fast_evaluate(self, *args, **kwargs):
+    def _map_kwargs(self, kwargs):
+        """
+        Mappa i kwargs rinominati del modello composito a quelli originali
+        dei sotto-modelli utilizzando le mappe univoche `left_kwargs_map` e `right_kwargs_map`.
+
+        Args:
+            kwargs (dict): Dizionario dei kwargs forniti al modello composito.
+
+        Returns:
+            tuple: Due dizionari, uno per `left` e uno per `right`.
+        """
+        # Mappa i kwargs per `left` utilizzando `left_kwargs_map`
+        left_kwargs = {
+            original_key: kwargs[composite_key]
+            for composite_key, original_key in self._left_kwarg_map.items()
+            if composite_key in kwargs
+        }
+
+        # Mappa i kwargs per `right` utilizzando `right_kwargs_map`
+        right_kwargs = {
+            original_key: kwargs[composite_key]
+            for composite_key, original_key in self._right_kwarg_map.items()
+            if composite_key in kwargs
+        }
+
+        return left_kwargs, right_kwargs
+    
+    def _map_args(self, args):
+        """
+        Divide gli args tra la funzione `left` e `right`, ignorando gli args della griglia.
+
+        Args:
+            args (tuple): Argomenti posizionali forniti al modello composito.
+
+        Returns:
+            tuple: Due tuple contenenti gli args per `left` e `right`.
+        """
+        # Se non ci sono abbastanza args per superare la griglia, restituisci tuple vuote
+        if len(args) <= len(self.grid_variables):
+            return (), ()
+
+        # Calcola gli args per `left`, tenendo conto dell'offset della griglia
+        left_start = len(self.grid_variables)
+        left_end = left_start + self.left.n_parameters
+        left_args = args[left_start:left_end]
+
+        # Se non ci sono abbastanza args per `right`, restituisci solo `left_args`
+        if left_end >= len(args):
+            return left_args, ()
+
+        # Calcola gli args per `right`
+        right_args = args[left_end:]
+        return left_args, right_args
+    
+    def _map_args_to_free_params(self, args):
+        if len(args) <= len(self.grid_variables):
+            return (), ()
+
+        # Calcola gli args per `left`, tenendo conto dell'offset della griglia
+        #left_start = len(self.grid_variables)
+        left_end = self.left.n_free_parameters
+        left_args = args[:left_end]
+
+        # Se non ci sono abbastanza args per `right`, restituisci solo `left_args`
+        if left_end >= len(args):
+            return left_args, ()
+
+        # Calcola gli args per `right`
+        right_args = args[left_end:]
+        return left_args, right_args
+    
+    
+    def evaluate(self, *args, **kwargs):
         
-        grid = []        
+        grid = []
+        k = 0
         for i, name in enumerate(self.grid_variables):
             if name in kwargs:
                 grid.append(kwargs.pop(name))
             else:
+                k += 1
                 grid.append(args[i])
         
-        return
+        left_args, right_args = self._map_args(args)
+        left_kwargs, right_kwargs = self._map_kwargs(kwargs)
+        
+        #print(left_args, right_args)
+        #print(left_kwargs, right_kwargs)
+        #print(grid)
+        
+        if self.op_str in self.LINEAR_OPERATIONS:
+            return self._operator(
+                self.left.evaluate(*grid, *left_args, **left_kwargs),
+                self.right.evaluate(*grid,*right_args, **right_kwargs),
+            )        
+        # Se l'operatore è composito
+        elif self.op_str == self.COMPOSITE_OPERATION:
+            left_res = self.left.evaluate(*grid, *left_args,**left_kwargs)
+            if isinstance(left_res, tuple):
+                return self.right.evaluate(*left_res, *left_args, **right_kwargs)
+            else:
+                return self.right.evaluate(left_res,*right_args, **right_kwargs)
+            
+    def call(self, grid, *args):
+        if len(args) != self.n_free_parameters:
+            raise ValueError(
+                # f"Troppi argomenti forniti per i parametri liberi. "
+                f"expected {self.n_free_parameters} args, got {len(args)}."
+            )
+        left_args, right_args = self._map_args_to_free_params(args)
+
+        if self.op_str in self.LINEAR_OPERATIONS:
+            return self._operator(
+                self.left.call(grid, *left_args),
+                self.right.call(grid, *right_args),
+            )
+
+        elif self.op_str == self.COMPOSITE_OPERATION:
+            left_res = self.left.call(grid, *left_args)
+            if isinstance(left_res, tuple):
+                return self.right.call(left_res, *right_args)
+            else:
+                return self.right.call([left_res], *right_args)
     
-    
-    
-    def evaluate(self, *args, **kwargs):
+    def __call__(self, *args, **kwargs):
+        """
+        Chiama il modello composito come fosse una funzione.
+
+        Questo metodo è pensato per un utilizzo più "diretto" e user-friendly. Accetta:
+        - `args`: I primi `len(self.grid_variables)` argomenti vengono interpretati come variabili di griglia.
+        - `kwargs`: Può contenere valori per parametri che non sono congelati. Se un parametro è congelato,
+
+        Args:
+            *args: Valori posizionali, i primi `len(self.grid_variables)` sono le variabili di griglia.
+            **kwargs: Eventuali coppie chiave=valore per aggiornare i parametri non congelati.
+
+        Returns:
+            Il risultato della funzione combinata `left` e `right` secondo l'operatore `op_str`.
+        """
+        grid = []
+        for i, grid_name in enumerate(self.grid_variables):
+            if grid_name not in kwargs:
+                grid.append(args[i])
+            else:
+                grid.append(kwargs.pop(grid_name))
+
+        tmp = {**self.parameters_values_dict, **kwargs}
+        left_vals, right_vals = self._map_kwargs(tmp)
+        
+
+        if self.op_str in self.LINEAR_OPERATIONS:
+            return self._operator(
+                self.left.evaluate(*grid, **left_vals),
+                self.right.evaluate(*grid, **right_vals),
+            )
+
+        elif self.op_str == self.COMPOSITE_OPERATION:
+            left_res = self.left.evaluate(*grid, **left_vals)
+
+            if isinstance(left_res, tuple):
+                return self.right.evaluate(*left_res, **right_vals)
+            else:
+                return self.right.evaluate(left_res, **right_vals)
+
+        raise ValueError(f"Unknown operation: {self.op_str}")
+        
+    '''def evaluate(self, *args, **kwargs):
         """
         Valuta il modello composito utilizzando i valori forniti come input.
 
@@ -896,6 +1072,9 @@ class CompositeModel(Model):
             a seconda della funzione `_callable` di `left` e `right`.
         """
         # Costruzione della griglia e del dizionario dei parametri
+        
+        #print(self._map_kwargs(kwargs))
+        #print(self._map_args(args))
         grid = []
         k = 0
         for i, name in enumerate(self.grid_variables):
@@ -933,10 +1112,12 @@ class CompositeModel(Model):
                 return self.right.evaluate(left_res, **right_vals)
 
         # Operatore sconosciuto
-        raise ValueError(f"Unknown operation: {self.op_str}")
+        raise ValueError(f"Unknown operation: {self.op_str}")'''
 
+    
+        
 
-    def call(self, grid, *args):
+    '''def call(self, grid, *args):
         """
         Chiama il modello in un contesto, ad esempio, di ottimizzazione,
         dove `args` rappresentano i valori per i parametri liberi nell'ordine in cui sono definiti.
@@ -1001,65 +1182,11 @@ class CompositeModel(Model):
             else:
                 return self.right.evaluate(left_res, **right)
 
-        raise ValueError(f"Unknown operation: {self.op_str}")
+        raise ValueError(f"Unknown operation: {self.op_str}")'''
 
     
     
-    def __call__(self, *args, **kwargs):
-        """
-        Chiama il modello composito come fosse una funzione.
-
-        Questo metodo è pensato per un utilizzo più "diretto" e user-friendly. Accetta:
-        - `args`: I primi `len(self.grid_variables)` argomenti vengono interpretati come variabili di griglia.
-        - `kwargs`: Può contenere valori per parametri che non sono congelati. Se un parametro è congelato,
-        
-        Args:
-            *args: Valori posizionali, i primi `len(self.grid_variables)` sono le variabili di griglia.
-            **kwargs: Eventuali coppie chiave=valore per aggiornare i parametri non congelati.
-
-        Returns:
-            Il risultato della funzione combinata `left` e `right` secondo l'operatore `op_str`.
-        """
-        grid = []
-        for i,grid_name in enumerate(self.grid_variables):
-            if grid_name not in kwargs:
-                grid.append(args[i])
-            else:
-                grid.append(kwargs.pop(grid_name))
-        #grid = args[: len(self.grid_variables)]
-        
-        tmp = {**self.parameters_values_dict, **kwargs}
-
-        
-        tmp_values = list(tmp.values())
-        
-        
-            
-        left_vals = {key: val for key, val in zip(self.left.parameters_keys, tmp_values)}
-        right_vals = {
-            key: val
-            for key, val in zip(
-                self.right.parameters_keys, tmp_values[len(self.left.parameters_keys):]
-            )
-        }
-        
-        
-        if self.op_str in self.LINEAR_OPERATIONS:
-            
-            return self._operator(
-                self.left.evaluate(*grid, **left_vals),
-                self.right.evaluate(*grid, **right_vals),
-            )
-
-        elif self.op_str == self.COMPOSITE_OPERATION:
-            left_res = self.left.evaluate(*grid, **left_vals)
-            
-            if isinstance(left_res, tuple):                
-                return self.right.evaluate(*left_res, **right_vals)
-            else:
-                return self.right.evaluate(left_res, **right_vals)
-
-        raise ValueError(f"Unknown operation: {self.op_str}")
+    
     
     def print_tree(self, prefix: str = "", is_last: bool = True) -> None:
         """
@@ -1107,3 +1234,5 @@ class CompositeModel(Model):
                 # Se è un Model foglia, stampiamo semplicemente il suo nome
                 leaf_symbol = "`-- " if child_is_last else "|-- "
                 print(f"{new_prefix}{leaf_symbol}{child.name}")
+                
+    
