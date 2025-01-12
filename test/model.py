@@ -2,7 +2,7 @@ import inspect
 from copy import deepcopy
 import warnings
 from parameter import Parameter, ParameterHandler
-from typing import Callable, List,  Tuple
+from typing import Callable, Dict, List,  Tuple
 #from io import StringIO
 from collections  import OrderedDict
 #from itertools import islice
@@ -16,7 +16,7 @@ evaluate rimane così (ma da snellire per composite model)
 call richiede tanti args quanti parametri liberi
 '''
 
-def componemodels(op, **kwargs):
+def componemodels(op, **kwargs) -> Callable[..., 'CompositeModel']:
     return lambda left, right: CompositeModel(left, right, op, **kwargs)
 
 class Model:
@@ -46,8 +46,7 @@ class Model:
         
 
     def _update_cache(self, key, value) -> None:
-        '''TODO: odio come ho implementato la cache,
-        trova un modo migliore pls'''
+        
         self._parameters._update_cache(key, value)
 
     # POINTER PROPRIETA
@@ -78,11 +77,11 @@ class Model:
         return self._n_outputs
 
     @property
-    def grid_variables(self):
+    def grid_variables(self) -> List[str]:
         return self._grid_variables
 
     @property
-    def parameters_names(self) -> List[str]:  # cached
+    def parameters_names(self) -> List[str]:  
         return self.parameters.parameters_names
 
     @property
@@ -94,7 +93,7 @@ class Model:
         return len(self.parameters)
 
     @property
-    def parameters_values(self) -> List[float]:  # cached
+    def parameters_values(self) -> List[float]:  
         return self.parameters.parameters_values
 
     @property
@@ -106,7 +105,7 @@ class Model:
         return self.parameters.free_parameters
 
     @property
-    def parameters_values_dict(self):
+    def parameters_values_dict(self) -> Dict[str, float]:
         return self.parameters.parameters_values_dict
 
     @property
@@ -153,6 +152,7 @@ class Model:
 
     def set_parameters_values(self, args=None, **kwargs) -> None:
         """
+        TODO: usare il __setitems__ direttamente
         Imposta i valori dei parametri utilizzando argomenti posizionali o parole chiave.
 
         Args:
@@ -229,26 +229,26 @@ class Model:
             args = [*args, *list(kwargs.keys())]
 
         self._set_frozen_state(True, *args)
-
+        self._update_cache()
         # AGGIORNO CACHE
-        self._update_cache(key="binary_freeze_map", value=[p.frozen for p in self])
-        self._update_cache(key="binary_melt_map", value=[not p.frozen for p in self])
-        self._update_cache(
-            key="not_frozen_indeces",
-            value=[
-                i
-                for i in range(len(self._binary_freeze_map))
-                if self._binary_freeze_map[i] is False
-            ],
-        )
-        self._update_cache(
-            key="frozen_indeces",
-            value=[
-                i
-                for i in range(len(self._binary_freeze_map))
-                if self._binary_freeze_map[i] is True
-            ],
-        )
+        #self._update_cache(key="binary_freeze_map", value=[p.frozen for p in self])
+        #self._update_cache(key="binary_melt_map", value=[not p.frozen for p in self])
+        #self._update_cache(
+        #    key="not_frozen_indeces",
+        #    value=[
+        #        i
+        #        for i in range(len(self._binary_freeze_map))
+        #        if self._binary_freeze_map[i] is False
+        #    ],
+        #)
+        #self._update_cache(
+        #    key="frozen_indeces",
+        #    value=[
+        #        i
+        #        for i in range(len(self._binary_freeze_map))
+        #        if self._binary_freeze_map[i] is True
+        #    ],
+        #)
 
     def unfreeze_parameters(self, *args) -> None:
         """
@@ -262,26 +262,26 @@ class Model:
             >>> obj.unfreeze_parameters()
         """
         self._set_frozen_state(False, *args)
-
+        self._update_cache()
         # AGGIORNO CACHE
-        self._update_cache(key="binary_freeze_map", value=[p.frozen for p in self])
-        self._update_cache(key="binary_melt_map", value=[not p.frozen for p in self])
-        self._update_cache(
-            key="not_frozen_indeces",
-            value=[
-                i
-                for i in range(len(self._binary_freeze_map))
-                if self._binary_freeze_map[i] is False
-            ],
-        )
-        self._update_cache(
-            key="frozen_indeces",
-            value=[
-                i
-                for i in range(len(self._binary_freeze_map))
-                if self._binary_freeze_map[i] is True
-            ],
-        )
+        #self._update_cache(key="binary_freeze_map", value=[p.frozen for p in self])
+        #self._update_cache(key="binary_melt_map", value=[not p.frozen for p in self])
+        #self._update_cache(
+        #    key="not_frozen_indeces",
+        #    value=[
+        #        i
+        #        for i in range(len(self._binary_freeze_map))
+        #        if self._binary_freeze_map[i] is False
+        #    ],
+        #)
+        #self._update_cache(
+        #    key="frozen_indeces",
+        #    value=[
+        #        i
+        #        for i in range(len(self._binary_freeze_map))
+        #        if self._binary_freeze_map[i] is True
+        #    ],
+        #)
 
     @staticmethod
     def _extract_params(method, default_value=1, **kwargs) -> tuple[list[str], list[float], list[bool]]:
@@ -324,6 +324,8 @@ class Model:
         """
         TODO: change: ndim = number of output of the model?
         Wrap a given function and create a model class instance with specified parameters and grid variables.
+        
+        TODO: se grid variables e params sono entrambi None, la griglia è automaticamente presa come i primi ndim args
 
         Parameters
         ----------
@@ -517,7 +519,6 @@ class Model:
 
     def evaluate(self, *args, **kwargs):
         """
-        TODO: add support for jax and autodiff
         Chiama la funzione wrappata `_callable` direttamente senza nessun overhead o controllo.
         Questo metodo è pensato per essere utilizzato in situazioni in cui non si ha bisogno
         di logiche aggiuntive su parametri, frozen.
@@ -556,11 +557,6 @@ class Model:
             # Se il param. era già stato impostato via args (potenzialmente non avviene mai),
             # viene sovrascritto qui con il valore congelato.
             final_kwargs[p.name] = p.value
-
-        # Sovrascrivi con kwargs (eventuali parametri liberi o congelati)
-        # Qui applichiamo direttamente gli aggiornamenti su final_kwargs.
-        #for k, v in kwargs.items():
-        #    final_kwargs[k] = v
 
         return final_kwargs
 
@@ -825,13 +821,7 @@ class CompositeModel(Model):
         parameters._is_inside_model = True
         
         # Slice per dividere i parametri tra left e right
-        #num_left_params = len(self.left.parameters_keys)
-        #left_kwargs = OrderedDict(
-        #    list(kwargs_map.items())[:num_left_params]
-        #)
-        #right_kwargs = OrderedDict(
-        #    list(kwargs_map.items())[num_left_params:]
-        #)
+        
         left_kwargs = OrderedDict()
         right_kwargs = OrderedDict()
         

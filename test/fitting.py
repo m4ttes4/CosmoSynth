@@ -661,12 +661,7 @@ class MCMC:
             key for key in self.model.parameters_keys if not self.model[key].frozen
         ]
 
-        # Costruiamo un dizionario dei parametri best-fit
-        # best_params = dict(zip(labels, best_fit))
-
-        # Creiamo la figura corner (opzionale, la conserviamo come attributo)
-        # fig = corner.corner(flat_samples, labels=labels)
-
+        
         # Inizializziamo MCMCResult
         # 2) Crea l'oggetto MCMCResult passandogli il sampler e gli altri oggetti necessari
         result = MCMCResult(
@@ -681,7 +676,6 @@ class MCMC:
             message="MCMC sampling completed successfully",
         )
 
-        # (Facoltativo) Se preferisci, puoi assegnare la figura dopo la creazione
-        # result.corner_plot = fig
+        #
 
         return result

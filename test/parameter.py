@@ -1,4 +1,4 @@
-from typing import List, Tuple, Union, Callable, Dict, Iterator
+from typing import List, Tuple, Union, Dict, Iterator
 import numpy as np
 from collections import OrderedDict
 import warnings
@@ -11,13 +11,6 @@ from tabulate import tabulate
 
 #if TYPE_CHECKING:
 from priors import Prior, UniformPrior
-
-
-
-class Constrain:
-    def __init__(self, func: Callable, *args) -> None:
-        pass
-
 
 class Parameter:
     """
@@ -507,54 +500,7 @@ class ParameterHandler:
     def cached_propreties(self):
         return self._cached_propreties
 
-    '''def _update_cache(self, key=None, value=None) -> None:
-        """aggiorna la cache dei parametri.
-        NOTE: perchè cache e non attributi? perchè mantengo tutto in un unica struttura dati
-        che posso gestire come voglio e ho tutto in unico blocco.
-        overhead hashmap è abbastanza piccolo da essere ignorato        
-        """
-        #keys = [
-        #    "parameters_names",
-        #    "parameters_values",
-        #    "parameters_bounds",
-        #    "parameters_keys",
-        #    "parameters_values_dict",
-        #    "binary_freeze_map",
-        #    "binary_melt_map",
-        #    "frozen_indeces",
-        #    "not_frozen_indeces",
-        #]
-        
-        if key is None and value is None:
-            values = [
-                [p.name for p in self],
-                [p.value for p in self],
-                [p.bounds for p in self],
-                [p for p in self._parameters.keys()],
-                {
-                    key: val
-                    for key, val in zip(self.parameters_keys, self.parameters_values)
-                },
-                [p.frozen for p in self],
-                [not p.frozen for p in self],
-                [
-                    i
-                    for i in range(len(self._binary_freeze_map))
-                    if self._binary_freeze_map[i] is True
-                ],
-                [
-                    i
-                    for i in range(len(self._binary_freeze_map))
-                    if self._binary_freeze_map[i] is False
-                ]
-            ]
-            for k,v in zip(self.cached_propreties, values):
-                self._cache[k]=v
-        else:
-            if key not in self.cached_propreties:
-                raise ValueError("Cache error")
-            self._cache[key] = value'''
-            
+                
     # ......................
     #     UPDATE CACHE
     # ......................
@@ -811,9 +757,11 @@ class ParameterHandler:
             values (Union[List, Dict]): Valori da assegnare (lista o dizionario).
             include_frozen (bool, opzionale): Se includere i parametri congelati. Default è False.
         """
+        
         self._assign_attribute(values, "value", include_frozen=include_frozen)
         self._update_cache()
-        
+    
+
 
     def set_bounds(
         self, bounds: Union[List, Dict], include_frozen: bool = False
@@ -900,11 +848,6 @@ class ParameterHandler:
                 f"Parameter {name} does not exists in function call. Write a new function call or build a composite model"
             )
 
-        #if name in self._parameters:
-        #    raise ValueError(f"Parameter {name} already exists.")
-
-        # if name is None:
-        #    name = parameter.name
 
         self._parameters[name] = parameter
         parameter._handler = self
@@ -927,8 +870,7 @@ class ParameterHandler:
         """
         #try:
         return self._parameters[name]
-        #except KeyError:
-        #    raise KeyError(f"Parameter '{name}' not found.")
+        
 
     def __setitem__(self, key: str, value: "Parameter") -> None:
         """
@@ -1016,30 +958,7 @@ class ParameterHandler:
         # Ritorniamo la tabella
         return table
 
-    '''def __str__(self) -> str:
-        """
-        Ritorna una rappresentazione in formato tabella dei parametri gestiti.
-
-        Returns:
-            str: Tabella che mostra nome, valore, bounds e stato frozen dei parametri.
-        """
-        buffer = StringIO()
-        
-        # Scriviamo l'header della tabella
-        buffer.write(f"{'Name':<10} {'Value':<10} {'Bounds':<15} {'Frozen':<10}\n")
-        buffer.write("-" * 50 + "\n")
-
-        # Scriviamo i dati di ogni parametro
-        for i, param in enumerate(self):
-            name = self.parameters_names[i]
-            value = str(param.value) if param.value is not None else "None"
-            bounds = str(param.bounds) if param.bounds is not None else "None"
-            frozen = "Yes" if param.frozen else "No"
-
-            buffer.write(f"{name:<10} {value:<10} {bounds:<15} {frozen:<10}\n")
-
-        # Ritorniamo il contenuto del buffer
-        return buffer.getvalue()'''
+    
 
     def items(self):
         """
