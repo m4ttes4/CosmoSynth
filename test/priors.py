@@ -5,8 +5,6 @@ definire Model(grid, theta))
 Il prior ritorna semplicemente Prior(point) = value
 '''
 
-# TODO possibile rendere Prior istanza di MOdel?
-#import model
 
 class Prior:
     def __init__(self, name):
@@ -21,6 +19,9 @@ class Prior:
         - 0.0 se 'valido'
         - float('inf') se 'invalido'
         """
+        raise NotImplementedError
+    
+    def _get_str(self):
         raise NotImplementedError
     
     def __or__(self, other) -> 'CompositePrior':
@@ -86,7 +87,6 @@ class UniformPrior(Prior):
         self.upper = upper
         self.valid = valid
         self.invalid = invalid
-        self._grid_variables = ['value']
     
     def evaluate(self, value):
         if value < self.lower or value > self.upper:

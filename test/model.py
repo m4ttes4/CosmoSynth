@@ -52,29 +52,29 @@ class Model:
 
     # POINTER PROPRIETA
     @property
-    def parameters(self):
+    def parameters(self) -> ParameterHandler:
         return self._parameters
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
     @name.setter
-    def name(self, value):
+    def name(self, value) -> None:
         if not isinstance(value, str):
             raise TypeError("New name must be of type string")
         self._name = value
 
     @property
-    def n_dim(self):
+    def n_dim(self) -> int:
         return self._n_dims
 
     @property
-    def n_inputs(self):
+    def n_inputs(self) -> int:
         return self._n_inputs
 
     @property
-    def n_outputs(self):
+    def n_outputs(self) -> int:
         return self._n_outputs
 
     @property
@@ -119,19 +119,13 @@ class Model:
 
     @property
     def _binary_freeze_map(self) -> List[bool]:
-        # possibile da cachare
         return self._parameters._binary_freeze_map
-        #if "binary_freeze_map" in self._cache:
-        #    return self._cache["binary_freeze_map"]
-        #return [p.frozen for p in self]
+        
 
     @property
     def _binary_melt_map(self) -> List[bool]:
-        # possibile da cachare
         return self.parameters._binary_melt_map
-        #if "binary_melt_map" in self._cache:
-        #    return self._cache["binary_melt_map"]
-        #return [not p.frozen for p in self]
+        
 
 
     # Simple Model is a leaf
@@ -146,26 +140,15 @@ class Model:
     @property
     def not_frozen_indeces(self) -> List[int]:
         return self.parameters.not_frozen_indeces
-        #if "not_frozen_indeces" in self._cache:
-        #    return self._cache["not_frozen_indeces"]
-        #return [
-        #    i
-        #    for i in range(len(self._binary_freeze_map))
-        #    if self._binary_freeze_map[i] is False
-        #]
+        
 
     @property
     def frozen_indeces(self) -> List[int]:
         return self.parameters.frozen_indeces
-        #if "frozen_indeces" in self._cache:
-        #    return self._cache["frozen_indeces"]
-        #return [
-        #    i
-        #    for i in range(len(self._binary_freeze_map))
-        #    if self._binary_freeze_map[i] is True
-        #]
+        
 
     def _map_name_to_index(self, name) -> int:
+        '''Return the index of the parameter -name- inside the ordered dict'''
         return self.parameters._map_name_to_index(name)
 
     def set_parameters_values(self, args=None, **kwargs) -> None:
@@ -339,6 +322,7 @@ class Model:
     @classmethod
     def wrap(cls, func, grid_variables=None, params=None, ndim=None, noutputs=1, default_values=1.0, initial_values:dict|None = None, param_option:dict=None, name='SimpleModel'):
         """
+        TODO: change: ndim = number of output of the model?
         Wrap a given function and create a model class instance with specified parameters and grid variables.
 
         Parameters
@@ -472,9 +456,16 @@ class Model:
         parameters._update_cache()
         new_cls = cls(func, parameters, _n_dims, _n_inputs, _n_outputs, name)
         new_cls._grid_variables = _grid
-        new_cls._tmp_dict = OrderedDict()
-        for call_kwarg in names:
-            new_cls._tmp_dict[call_kwarg] = 0
+        
+        # NOTE currently is not pocssible to do in a different way
+        for i in range(len(_grid)):
+            if names[i] != _grid[i]:
+                raise ValueError(f'Grid elements like {_grid[i]} must be defined before the parameters')
+        
+        new_cls._call_kwargs = names
+        #new_cls._tmp_dict = OrderedDict()
+        #for call_kwarg in names:
+        #    new_cls._tmp_dict[call_kwarg] = 0
         # Ord dict per zippare gli args nelle giuste kwargs
         #{call_kwarg:1 for call_kwarg in names}
         return new_cls
@@ -533,14 +524,14 @@ class Model:
         """
         return self._callable(*args, **kwargs)
     
-    def validate_args(self, args, kwargs):
+    def validate_args(self, args):
         """
         Prepara i parametri finali per la chiamata `_callable`.
 
         Logica:
         - `args` riempie i parametri liberi nell'ordine in cui sono definiti.
         - I parametri congelati sono aggiunti con i loro valori correnti.
-        - `kwargs` può sovrascrivere qualsiasi parametro.
+        
         - Il risultato è un unico dizionario `final_args` che viene passato come **kwargs a `_callable`.
         """
         if len(args) != self.n_free_parameters:
@@ -549,23 +540,14 @@ class Model:
                 f"expected {self.n_free_parameters}, got {len(args)}."
                 "number of args must be equal to number of free parameters"
             )
-            
-        '''final_kwargs = {**self.parameters_values_dict}
-        
-        j = 0
-        for key in self.parameters_keys:
-            if not self[key].frozen:
-                final_kwargs[key] = args[j]
-        
-        final_kwargs.update(**kwargs)'''
-            
+                        
         # Costruiamo final_args vuoto e lo riempiamo in maniera incrementale
         final_kwargs = {}
 
         # Parametri liberi (free parameters)
-        free_params = self.free_parameters
+        #free_params = self.free_parameters
         for i, val in enumerate(args):
-            final_kwargs[free_params[i].name] = val
+            final_kwargs[self.free_parameters[i].name] = val
 
         # Parametri congelati (frozen parameters)
         # Qui non creiamo nuovi oggetti, iteriamo direttamente sui parametri congelati
@@ -577,8 +559,8 @@ class Model:
 
         # Sovrascrivi con kwargs (eventuali parametri liberi o congelati)
         # Qui applichiamo direttamente gli aggiornamenti su final_kwargs.
-        for k, v in kwargs.items():
-            final_kwargs[k] = v
+        #for k, v in kwargs.items():
+        #    final_kwargs[k] = v
 
         return final_kwargs
 
@@ -592,54 +574,32 @@ class Model:
 
         La validazione di `args` e la preparazione degli argomenti finali sono metodi distinti.
         """
-        final_args = self.validate_args(args, kwargs)
+        final_args = self.validate_args(args)
         return self._callable(*grid, **final_args)
-        
-    '''
-    def call(self, grid, *args, **kwargs):
-        """
-        Chiama la funzione wrappata con gli argomenti forniti.
-        
-        Args:
-            *args: Valori per i parametri non congelati, forniti in ordine.
-        
-        Returns:
-            Il risultato della funzione originale con i parametri congelati.
-        """
-        if len(args) > self.n_free_parameters+len(self.grid_variables):
-            raise ValueError(f"Troppi argomenti forniti. Aspettati al massimo {self.n_free_parameters}.")
-        
-        # BUG: e se uno definisce le grid variables dopo gli args? --> devo usare kwargs        
-        #grid = args[:len(self.grid_variables)]
-        # Mappa gli args sui parametri non congelati
-        #provided_args = dict(zip(self.unfrozen_params, args))
-        provided_args = {p.name:arg for p,arg in zip(self.free_parameters,args)}
-        frozen_params = {p.name:p.value for p in self.frozen_parameters}
-        # Combina i parametri forniti con quelli congelati
-        final_args = {**frozen_params, **provided_args, **kwargs}
-        
-        # Ordina gli argomenti secondo l'ordine della funzione originale
-        #ordered_args = [final_args[param] for param in self.all_params]
-        #print('chiamata con,', final_args)
-        
-        # Chiama la funzione originale
-        return self._callable(*grid ,**final_args)'''
-        
+    
+    
         
     def __call__(self, *args, **kwargs):
         '''
-        Si aspetta che la griglia sia fornita come i primi args, altrimenti 
-        deve essere data rta i kwargs
+        Function to call the model once the function is wrapped
+        args:
+            the first ndim elements are the grid
+        kwargs:
+            keyword arguments to overload the default values
         '''
+        if len(args) > len(self.grid_variables):
+            raise ValueError(f'To much args for the grid, expected {len(self.grid_variables)} but got {len(args)}')
+        
+        tmp = {}
         
         for i, grid_name in enumerate(self.grid_variables):
             if grid_name not in kwargs:
-                self._tmp_dict[grid_name] = args[i]
+                tmp[grid_name] = args[i]
                 
-        self._tmp_dict.update(**self.parameters_values_dict)
-        self._tmp_dict.update(**kwargs)
+        tmp.update(**self.parameters_values_dict)
+        tmp.update(**kwargs)
 
-        return self._callable(**self._tmp_dict)
+        return self._callable(**tmp)
 
     def __getitem__(self, name: str) -> Parameter:
         return self.parameters[name]
@@ -902,6 +862,17 @@ class CompositeModel(Model):
         return model_info + table
     
     
+    def fast_evaluate(self, *args, **kwargs):
+        
+        grid = []        
+        for i, name in enumerate(self.grid_variables):
+            if name in kwargs:
+                grid.append(kwargs.pop(name))
+            else:
+                grid.append(args[i])
+        
+        return
+    
     
     
     def evaluate(self, *args, **kwargs):
@@ -925,9 +896,17 @@ class CompositeModel(Model):
             a seconda della funzione `_callable` di `left` e `right`.
         """
         # Costruzione della griglia e del dizionario dei parametri
-        grid = args[: len(self.grid_variables)]
+        grid = []
+        k = 0
+        for i, name in enumerate(self.grid_variables):
+            if name in kwargs:
+                grid.append(kwargs.pop(name))
+            else:
+                k += 1
+                grid.append(args[i])
+                
         #tmp = {**self.parameters_values_dict, **kwargs}
-        tmp = {key:val for key,val in zip(self.parameters_keys, args[len(grid):])}
+        tmp = {key:val for key,val in zip(self.parameters_keys, args[k:])}
         tmp.update(**kwargs)
 
         # Prepara gli iteratori per dividere i parametri tra left e right
@@ -957,7 +936,7 @@ class CompositeModel(Model):
         raise ValueError(f"Unknown operation: {self.op_str}")
 
 
-    def call(self, grid, *args, **kwargs):
+    def call(self, grid, *args):
         """
         Chiama il modello in un contesto, ad esempio, di ottimizzazione,
         dove `args` rappresentano i valori per i parametri liberi nell'ordine in cui sono definiti.
@@ -989,7 +968,7 @@ class CompositeModel(Model):
 
 
         # Prepara i parametri finali
-        tmp = list({**self.parameters_values_dict, **kwargs}.values())
+        tmp = list({**self.parameters_values_dict}.values())
 
         # Identifica gli indici dei parametri liberi
         indices = [i for i in range(len(self._binary_melt_map)) if self._binary_melt_map[i]]
@@ -1033,15 +1012,7 @@ class CompositeModel(Model):
         Questo metodo è pensato per un utilizzo più "diretto" e user-friendly. Accetta:
         - `args`: I primi `len(self.grid_variables)` argomenti vengono interpretati come variabili di griglia.
         - `kwargs`: Può contenere valori per parametri che non sono congelati. Se un parametro è congelato,
-        verrà emesso un warning e il valore fornito sarà ignorato.
-
-        Logica:
-        1. Estrae le grid variables dagli args.
-        2. Utilizza `parameters_values_dict` come base per i parametri.
-        3. Aggiorna i parametri non congelati con eventuali `kwargs`.
-        4. Suddivide i parametri aggiornati tra `left` e `right`.
-        5. Chiama `left.evaluate` e `right.evaluate` componendo i risultati con l'operatore.
-
+        
         Args:
             *args: Valori posizionali, i primi `len(self.grid_variables)` sono le variabili di griglia.
             **kwargs: Eventuali coppie chiave=valore per aggiornare i parametri non congelati.
@@ -1057,19 +1028,11 @@ class CompositeModel(Model):
                 grid.append(kwargs.pop(grid_name))
         #grid = args[: len(self.grid_variables)]
         
-        tmp = self.parameters_values_dict
+        tmp = {**self.parameters_values_dict, **kwargs}
 
-        if kwargs:
-            for key in kwargs:
-                if self[key].frozen:
-                    warnings.warn(f"Parameter {key} is frozen, new value will be ignored")
-                else:
-                    tmp[key] = kwargs[key]
         
-        # Pre-calcola i valori di tmp una volta sola
         tmp_values = list(tmp.values())
         
-        # Suddividi i parametri tra left e right
         
             
         left_vals = {key: val for key, val in zip(self.left.parameters_keys, tmp_values)}
