@@ -228,7 +228,7 @@ class MCMCResult:
         if self.best_fit is not None:
             lines.append("    best_fit:")
             for pname, val in zip(self.var_names, self.best_fit):
-                lines.append(f"        {pname} = {val:.4g}")
+                lines.append(f"  {pname} = {val:.4g}  {self.model[pname].description}")
 
         # Se abbiamo summary percentile
         if self.parameter_summary:
@@ -282,6 +282,7 @@ class MCMC:
     def __init__(self, model, **kwargs) -> None:
         self._model = model
         self.emcee_kwargs = kwargs
+    
 
     @property
     def model(self):
@@ -313,11 +314,7 @@ class MCMC:
             Il valore della log-prior.
         """
         return sum(param(val) for param, val in zip(self.model.free_parameters, theta))
-        # Controlla se ogni parametro è all'interno dei suoi bounds
-        #for param, val in zip(self.model.free_parameters, theta):
-            #if val < param.bounds[0] or val > param.bounds[1]:
-            #    return -np.inf
-        #    if param(val)
+        
 
     def loglike(
         self,
@@ -347,6 +344,14 @@ class MCMC:
             Valore della log-likelihood.
         """
         # Calcolo del modello
+        #
+        #NOTE place  here possible constrains
+        #like:
+        #for i, param in enumerate(self.model):
+        #   if param.is_constrained:
+        #       theta[i] = param.constrain(theta[i])
+        #
+        #theta = self.model.apply_constrains(theta)
         ymodel = self.model.call([xdata], *theta)
         # Residui e calcolo della likelihood
         #residuals = ydata - ymodel
@@ -551,7 +556,6 @@ class MCMC:
         nwalkers: int = 32,
         nsteps: int = 5000,
         discard: int = 100,
-        thin: int = 15,
         dispersion: float | int = 0.1,
         optimize: bool = False,
         **kwargs,
@@ -598,12 +602,15 @@ class MCMC:
                 element = kwargs.pop(var)
                 grid.append(element)
             else:
-                raise KeyError(f"La variabile '{var}' non è presente in kwargs.")
+                raise KeyError(f"La variabile di griglia '{var}' non è presente in kwargs.")
 
         self.emcee_kwargs.update(**kwargs)
         # Controlla lo stato iniziale e i dati
         theta0, grid = self._check_initial_state(theta0=theta0, grid=grid, data=data)
 
+        if error is None:
+            error = np.ones(np.shape(data))
+            
         if optimize is True:
             # guess initial position by optimization
             from scipy.optimize import minimize
@@ -641,20 +648,6 @@ class MCMC:
         # setattr( sampler, "log_prob_fn",lambda p: self.log_probability(p, grid, data, error))
         # Esecuzione MCMC vera e propria
         sampler.run_mcmc(init_positions, nsteps, progress=True, **kwargs)
-
-        # Estrae i campioni (flattening delle catene dopo burn-in e thinning)
-        # Ottieni la catena completa (senza scartare e senza thinning)
-        # chain = sampler.get_chain(discard=discard, thin=1, flat=False)
-        # Ottieni i campioni "flattened" dopo burn-in e thinning
-        # flat_samples = sampler.get_chain(discard=discard, thin=thin, flat=True)
-
-        # Stima dei parametri "best fit" (qui usiamo la mediana come esempio)
-        # best_fit = np.median(flat_samples, axis=0)
-
-        # Calcolo dei residui con i parametri best fit
-        # model_output = self.model.call(grid, *best_fit)
-        # Ravel se i dati sono multidimensionali
-        # residual = (data - model_output).ravel()
 
         # Prepara i nomi dei parametri
         labels = [

@@ -1,4 +1,4 @@
-from typing import List, Tuple, Union, Dict, Iterator
+from typing import Callable, List, Tuple, Union, Dict, Iterator
 import numpy as np
 from collections import OrderedDict
 import warnings
@@ -11,6 +11,8 @@ from tabulate import tabulate
 
 #if TYPE_CHECKING:
 from priors import Prior, UniformPrior
+
+
 
 class Parameter:
     """
@@ -33,6 +35,10 @@ class Parameter:
         
     TODO: [ok] modificare self.name una volta dentro al handler modifica parameters_keys
     
+    TODO: supporto a constrain multipli
+    regole per i constrain: sono trasformazioni che prendono un valore e lo modificano.
+    function(value) return new_value
+    
     NOTE: Bounds legacy rimangono per linear opt. con scipy siccome i prior non sono supportati
     """
 
@@ -44,7 +50,8 @@ class Parameter:
         bounds: Tuple[float, float] = (-float("inf"), float("inf")),
         description: str = "",
         prior:Prior = None,
-        handler: 'ParameterHandler' = None
+        #handler: 'ParameterHandler' = None
+        constrain:Callable = None, # to be updated for fitting purposes
     ) -> None:
         """
         Inizializza un nuovo parametro.
@@ -69,20 +76,33 @@ class Parameter:
         self._frozen = frozen
         self._bounds = bounds
         self._description = description
-        self._handler = handler
+        self._handler = []
         self._chached_properties = ['value','bounds','frozen']
+        self.constrain = constrain
+        
         
         if prior is None:
             self._prior = UniformPrior(-float('inf'), float('inf'))
         else:
             self._prior = prior
     
-    def _update_handler_cache(self):
-        if self._handler is not None:
-            self._handler._update_cache()
-
+    def _update_handler_cache(self) -> None:
+        if self._handler:
+            for handler in self._handler:
+                handler._update_cache()
+                
     @property
-    def prior(self):
+    def is_constrained(self) -> bool:
+        if self.constrain is not None:
+            return True
+        return False
+    
+    @property
+    def handler(self) -> List['ParameterHandler']:
+        return self._handler
+    
+    @property
+    def prior(self) -> Prior:
         return self._prior
     
     @prior.setter
@@ -850,7 +870,7 @@ class ParameterHandler:
 
 
         self._parameters[name] = parameter
-        parameter._handler = self
+        parameter._handler.append(self)
         # self.parameter_map[parameter.name] = parameter.name
 
         # self._invalidate_cache()
@@ -885,7 +905,6 @@ class ParameterHandler:
             TypeError: Se value non è un'istanza di Parameter.
             ValueError: Se il parametro esiste già.
         """
-        
         if key not in self and self._is_inside_model:
             raise ValueError(
                 f"Parameter {key} does not exists in function call please Write a new function call or build a composite model"

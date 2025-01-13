@@ -88,6 +88,7 @@ class UniformPrior(Prior):
         self.valid = valid
         self.invalid = invalid
     
+    
     def evaluate(self, value):
         if value < self.lower or value > self.upper:
             return self.invalid

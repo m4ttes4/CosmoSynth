@@ -14,6 +14,10 @@ TODO: nuova gestione delle chiamate
 __call__ prende args la griglia, kwargs i parametri
 evaluate rimane così (ma da snellire per composite model)
 call richiede tanti args quanti parametri liberi
+
+BUG: diversi handlers possono puntare allo stesso parametro.
+param.hadler ora è lista per aggiornamento della cache
+
 '''
 
 def componemodels(op, **kwargs) -> Callable[..., 'CompositeModel']:
@@ -45,7 +49,7 @@ class Model:
         #self._cache = {}  # cache base
         
 
-    def _update_cache(self, key, value) -> None:
+    def _update_cache(self, key=None, value=None) -> None:
         
         self._parameters._update_cache(key, value)
 
@@ -570,7 +574,9 @@ class Model:
 
         La validazione di `args` e la preparazione degli argomenti finali sono metodi distinti.
         """
+        #print(self.name, " got", args)
         final_args = self.validate_args(args)
+        #print(f"{self.name} got {args}, {final_args}")
         return self._callable(*grid, **final_args)
     
     
@@ -598,9 +604,18 @@ class Model:
         return self._callable(**tmp)
 
     def __getitem__(self, name: str) -> Parameter:
+        #print('getting')
         return self.parameters[name]
 
     def __setitem__(self, key, value: Parameter) -> None:
+        #print('Updated', self.name)
+        #self.parameters.__setitem__(key, value)
+        #self._update_cache()
+        #if self.left:
+        #    self.left._update_cache()
+        #if self.right:
+        #    self.right._update_cache()
+        
         return self.parameters.__setitem__(key, value)
 
     def __contains__(self, key: str) -> bool:
@@ -812,6 +827,7 @@ class CompositeModel(Model):
 
                     parameters.add_parameter(param, name=name)
                     kwargs_map[name] = key
+                    param._handler.append(parameters)
                 n += 1
 
             dfs(node.left)
@@ -819,6 +835,7 @@ class CompositeModel(Model):
 
         dfs(self)
         parameters._is_inside_model = True
+        
         
         # Slice per dividere i parametri tra left e right
         
@@ -985,7 +1002,7 @@ class CompositeModel(Model):
                 f"expected {self.n_free_parameters} args, got {len(args)}."
             )
         left_args, right_args = self._map_args_to_free_params(args)
-
+        #print(f'{self.name} got {args}, {left_args}, {right_args}')
         if self.op_str in self.LINEAR_OPERATIONS:
             return self._operator(
                 self.left.call(grid, *left_args),
@@ -1224,5 +1241,14 @@ class CompositeModel(Model):
                 # Se è un Model foglia, stampiamo semplicemente il suo nome
                 leaf_symbol = "`-- " if child_is_last else "|-- "
                 print(f"{new_prefix}{leaf_symbol}{child.name}")
+                
+    def __getitem__(self, name):
+        if name in self._left_kwarg_map:
+            return self.left[self._left_kwarg_map[name]]
+        elif name in self._right_kwarg_map:
+            return self.right[self._right_kwarg_map[name]]
+        else:
+            raise ValueError('not present in model')
+        #return super().__getitem__(name)
                 
     
