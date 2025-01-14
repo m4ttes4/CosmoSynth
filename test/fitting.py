@@ -5,8 +5,6 @@ from typing import Union, Dict, Optional
 import emcee
 import corner
 
-
-
 class MCMCResult:
     """
     Classe che raccoglie e gestisce i risultati di un fitting MCMC.
@@ -277,12 +275,18 @@ class MCMC:
         - `moves`
         - `backend`
         - etc.
+        
+    TODO: add support for different statistcs
+    TODO: modify call to account for number of dimensions of the model
     """
 
     def __init__(self, model, **kwargs) -> None:
         self._model = model
         self.emcee_kwargs = kwargs
     
+        # NOTE currently to discuss
+        if self.model.n_outputs > 1:
+            raise NotImplementedError('Multiple outputs are not currentrly supported')
 
     @property
     def model(self):
@@ -483,6 +487,8 @@ class MCMC:
             o se la lunghezza di `theta0` non corrisponde al numero di parametri liberi,
             o se la dimensione dei dati non corrisponde alla dimensione dell'output del modello.
         """
+        
+        
         if not isinstance(grid, (list, np.ndarray)):
             raise TypeError(
                 "`grid` deve essere una lista o un numpy array (es. [X], [X, Y, ...])."
@@ -547,12 +553,22 @@ class MCMC:
 
         return theta0, grid
 
+    def _look_invalid_initial_points(self, theta):
+        names = [name for name in self.model.parameters_keys if self.model[name].frozen is False]
+        assert len(names) == len(theta)
+        
+        for name, val in zip(names, theta):
+            if not np.isfinite(self.model[name].prior(val)):
+                raise ValueError(f'val {val} for param {name} has conflict with prior {self.model[name].prior}')
+        
+    
     def fit(
         self,
-        # grid: Union[list, np.ndarray],
+        #grid: Union[list, np.ndarray],
         data: Union[list, np.ndarray],
         theta0: Optional[Union[list, np.ndarray, Dict[str, float]]] = None,
         error: Optional[Union[list, np.ndarray]] = None,
+        *,
         nwalkers: int = 32,
         nsteps: int = 5000,
         discard: int = 100,
@@ -607,6 +623,7 @@ class MCMC:
         self.emcee_kwargs.update(**kwargs)
         # Controlla lo stato iniziale e i dati
         theta0, grid = self._check_initial_state(theta0=theta0, grid=grid, data=data)
+        self._look_invalid_initial_points(theta0)
 
         if error is None:
             error = np.ones(np.shape(data))
@@ -616,10 +633,11 @@ class MCMC:
             from scipy.optimize import minimize
 
             initial_point = minimize(
-                self.log_probability,
+                lambda xtheta, xgrid, xdata, err: -self.log_probability(xtheta, xgrid, xdata, err),
                 x0=theta0,
                 args=(grid, data, error),
                 bounds=[p.bounds for p in self.model if not p.frozen],
+                
             )
             if initial_point.success:
                 print(f"Optimization done, initial position is {initial_point.x}")

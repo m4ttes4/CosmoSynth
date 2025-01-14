@@ -1,3 +1,4 @@
+from functools import partial
 import inspect
 from copy import deepcopy
 import warnings
@@ -9,16 +10,7 @@ from collections  import OrderedDict
 import operator
 from tabulate import tabulate
 
-'''
-TODO: nuova gestione delle chiamate
-__call__ prende args la griglia, kwargs i parametri
-evaluate rimane così (ma da snellire per composite model)
-call richiede tanti args quanti parametri liberi
 
-BUG: diversi handlers possono puntare allo stesso parametro.
-param.hadler ora è lista per aggiornamento della cache
-
-'''
 
 def componemodels(op, **kwargs) -> Callable[..., 'CompositeModel']:
     return lambda left, right: CompositeModel(left, right, op, **kwargs)
@@ -47,11 +39,12 @@ class Model:
         self._name = name
         self._grid_variables = []  # Inizializza _grid_variables nel costruttore
         #self._cache = {}  # cache base
+        self._partial = partial(self._callable, **self.parameters_values_dict)
         
 
-    def _update_cache(self, key=None, value=None) -> None:
-        
+    def _update_cache(self, key=None, value=None) -> None:        
         self._parameters._update_cache(key, value)
+        self._partial = partial(self._callable, **self.parameters_values_dict)
 
     # POINTER PROPRIETA
     @property
@@ -579,29 +572,31 @@ class Model:
         #print(f"{self.name} got {args}, {final_args}")
         return self._callable(*grid, **final_args)
     
+    def __call__(self,*args,**kwargs):
+        return self._partial(*args, **kwargs)
     
         
-    def __call__(self, *args, **kwargs):
-        '''
-        Function to call the model once the function is wrapped
-        args:
-            the first ndim elements are the grid
-        kwargs:
-            keyword arguments to overload the default values
-        '''
-        if len(args) > len(self.grid_variables):
-            raise ValueError(f'To much args for the grid, expected {len(self.grid_variables)} but got {len(args)}')
-        
-        tmp = {}
-        
-        for i, grid_name in enumerate(self.grid_variables):
-            if grid_name not in kwargs:
-                tmp[grid_name] = args[i]
-                
-        tmp.update(**self.parameters_values_dict)
-        tmp.update(**kwargs)
+    #def __call__(self, *args, **kwargs):
+    #    '''
+    #    Function to call the model once the function is wrapped
+    #    args:
+    #        the first ndim elements are the grid
+    #    kwargs:
+    #        keyword arguments to overload the default values
+    #    '''
+    #    if len(args) > len(self.grid_variables):
+    #        raise ValueError(f'To much args for the grid, expected {len(self.grid_variables)} but got {len(args)}')
+    #    
+    #    tmp = {}
+    #    
+    ##    for i, grid_name in enumerate(self.grid_variables):
+    ##        if grid_name not in kwargs:
+    ##            tmp[grid_name] = args[i]
+    #            
+    #    tmp.update(**self.parameters_values_dict)
+    #    tmp.update(**kwargs)#
 
-        return self._callable(**tmp)
+    #    return self._callable(**tmp)
 
     def __getitem__(self, name: str) -> Parameter:
         #print('getting')
@@ -609,14 +604,14 @@ class Model:
 
     def __setitem__(self, key, value: Parameter) -> None:
         #print('Updated', self.name)
-        #self.parameters.__setitem__(key, value)
+        self.parameters.__setitem__(key, value)
         #self._update_cache()
         #if self.left:
         #    self.left._update_cache()
         #if self.right:
         #    self.right._update_cache()
         
-        return self.parameters.__setitem__(key, value)
+        #return self.parameters.__setitem__(key, value)
 
     def __contains__(self, key: str) -> bool:
         return self.parameters.__contains__(key)
@@ -646,6 +641,11 @@ class Model:
 
 
 class CompositeModel(Model):
+    
+    '''
+    TODO: add possib. to change single submodel inside the tree
+    '''
+    
     LINEAR_OPERATIONS = ["+", "-", "*", "/", "**"]
     COMPOSITE_OPERATION = "|"
 
@@ -654,9 +654,7 @@ class CompositeModel(Model):
     _name = "CompositeModel"
     _callable = None
 
-    def __init_subclass__(cls) -> None:
-        ## deprecated
-        return super().__init_subclass__()
+    
 
     def __init__(self, left=None, right=None, op="+") -> None:
         self._left = left
@@ -676,11 +674,7 @@ class CompositeModel(Model):
             self._init_parameters()
         )
         self.submodels = self._collect_submodels()
-        #self._tmp_dict = OrderedDict()
-        #for grid_kwarg in self.left.grid_variables:
-        #    self._tmp_dict[grid_kwarg] = 0.0
-        #self._tmp_dict.update(**self.parameters_values_dict)
-        #self._cache = {}
+        
 
     @property
     def left(self) -> Model|None:
@@ -951,7 +945,6 @@ class CompositeModel(Model):
             return (), ()
 
         # Calcola gli args per `left`, tenendo conto dell'offset della griglia
-        #left_start = len(self.grid_variables)
         left_end = self.left.n_free_parameters
         left_args = args[:left_end]
 
@@ -1002,7 +995,7 @@ class CompositeModel(Model):
                 f"expected {self.n_free_parameters} args, got {len(args)}."
             )
         left_args, right_args = self._map_args_to_free_params(args)
-        #print(f'{self.name} got {args}, {left_args}, {right_args}')
+        
         if self.op_str in self.LINEAR_OPERATIONS:
             return self._operator(
                 self.left.call(grid, *left_args),
@@ -1017,6 +1010,32 @@ class CompositeModel(Model):
                 return self.right.call([left_res], *right_args)
     
     def __call__(self, *args, **kwargs):
+        grid = []
+        for i, grid_name in enumerate(self.grid_variables):
+            if grid_name not in kwargs:
+                grid.append(args[i])
+            else:
+                grid.append(kwargs.pop(grid_name))
+                
+        left_vals, right_vals = self._map_kwargs(kwargs)
+        #print(left_vals)
+        #print(right_vals)
+        if self.op_str in self.LINEAR_OPERATIONS:
+            return self._operator(
+                self.left(*grid, **left_vals),
+                self.right(*grid, **right_vals),
+            )
+
+        elif self.op_str == self.COMPOSITE_OPERATION:
+            left_res = self.left(*grid, **left_vals)
+
+            if isinstance(left_res, tuple):
+                return self.right(*left_res, **right_vals)
+            else:
+                return self.right(left_res, **right_vals)
+        
+    
+    '''def __call__(self, *args, **kwargs):
         """
         Chiama il modello composito come fosse una funzione.
 
@@ -1056,7 +1075,7 @@ class CompositeModel(Model):
             else:
                 return self.right.evaluate(left_res, **right_vals)
 
-        raise ValueError(f"Unknown operation: {self.op_str}")
+        raise ValueError(f"Unknown operation: {self.op_str}")'''
         
     '''def evaluate(self, *args, **kwargs):
         """
@@ -1243,12 +1262,12 @@ class CompositeModel(Model):
                 print(f"{new_prefix}{leaf_symbol}{child.name}")
                 
     def __getitem__(self, name):
-        if name in self._left_kwarg_map:
-            return self.left[self._left_kwarg_map[name]]
-        elif name in self._right_kwarg_map:
-            return self.right[self._right_kwarg_map[name]]
-        else:
-            raise ValueError('not present in model')
-        #return super().__getitem__(name)
+        #if name in self._left_kwarg_map:
+        #    return self.left[self._left_kwarg_map[name]]
+        #elif name in self._right_kwarg_map:
+        #    return self.right[self._right_kwarg_map[name]]
+        #else:
+        #    raise ValueError('not present in model')
+        return super().__getitem__(name)
                 
     

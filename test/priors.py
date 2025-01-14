@@ -81,7 +81,7 @@ class CompositePrior(Prior):
 
 
 class UniformPrior(Prior):
-    def __init__(self, lower, upper, valid = 0.0, invalid = float('inf')):
+    def __init__(self, lower, upper, valid = 0.0, invalid = -float('inf')):
         super().__init__('Uniform Prior')
         self.lower = lower
         self.upper = upper
