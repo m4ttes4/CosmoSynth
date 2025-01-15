@@ -1,4 +1,4 @@
-from typing import Callable, List, Tuple, Union, Dict, Iterator
+from typing import List, Literal, Tuple, Union, Dict, Iterator
 import numpy as np
 from collections import OrderedDict
 import warnings
@@ -6,13 +6,31 @@ from typing import Iterable
 from io import StringIO
 from copy import deepcopy
 from tabulate import tabulate
-#from priors import Prior, UniformPrior
-#from typing import TYPE_CHECKING
+
+
+
+__all__ = ['Parameter',
+           'ParameterHandler',
+           'Constrain',
+           'FunctionConstrain',
+           'TieConstrain']
 
 #if TYPE_CHECKING:
 from priors import Prior, UniformPrior
 
+'''
+Constrain Idea: 
+Tied = constrain che obbliga un parametro ad assumere un valore sulla base di un altro
+[riduce i gradi di libertà]
+Functional = constrain che modifica il valore di un parametro secondo una funzione
+[non riduce i gradi di libertà]
 
+Come gestire i constrain?
+se un parametro è tied non è free ma deve comparire nella function call?
+risposta: credo di no LOL
+
+TODO: [] fare i dovuti check che i parametri free e frozen risolvano correttamente i constrains
+'''
 
 class Parameter:
     """
@@ -33,6 +51,8 @@ class Parameter:
         Implementazione dei Prior
         Supporto ai constrain
         
+        questo può essere fatto usando @singledispatch di functools
+        
     TODO: [ok] modificare self.name una volta dentro al handler modifica parameters_keys
     
     TODO: supporto a constrain multipli
@@ -51,7 +71,7 @@ class Parameter:
         description: str = "",
         prior:Prior = None,
         #handler: 'ParameterHandler' = None
-        constrain:Callable = None, # to be updated for fitting purposes
+        constrain:'Constrain' = None, # to be updated for fitting purposes
     ) -> None:
         """
         Inizializza un nuovo parametro.
@@ -78,7 +98,7 @@ class Parameter:
         self._description = description
         self._handler = []
         self._chached_properties = ['value','bounds','frozen']
-        self.constrain = constrain
+        self._constrain = constrain
         
         
         if prior is None:
@@ -90,12 +110,31 @@ class Parameter:
         if self._handler:
             for handler in self._handler:
                 handler._update_cache()
-                
+    
     @property
-    def is_constrained(self) -> bool:
-        if self.constrain is not None:
+    def is_free(self) -> bool:
+        '''helper function to see if a param is frozen or constrained'''
+        return not (self.frozen or self.is_tied)
+        
+    @property
+    def is_tied(self) -> bool:
+        if self.constrain is not None and self.constrain.reduce_varys:
             return True
         return False
+    
+    @property
+    def constrain(self) -> 'Constrain':
+        return self._constrain
+    
+    @constrain.setter
+    def constrain(self, value) -> None:
+        ParameterValidator.validate_constrain(value)
+        self._constrain = value
+        self._update_handler_cache()
+    
+    @property
+    def has_constrain(self) -> bool:
+        return True if self.constrain is not None else False
     
     @property
     def handler(self) -> List['ParameterHandler']:
@@ -313,11 +352,11 @@ class Parameter:
         buffer.write(f"PARAM NAME: {self.name}\n")
 
         # Definizione delle intestazioni
-        field_names = ["NAME", "VALUE", "FROZEN", "PRIOR", "DESCR:"]
+        field_names = ["NAME", "VALUE", "IS-FREE", "PRIOR", "DESCR:"]
 
         # Preparazione dei dati
         value_str = f"{self._value:.5g}"
-        froz_str = "Yes" if self.frozen else "No"
+        froz_str = "Yes" if self.is_free else "No"
         prior_str = self.prior._get_str()
 
         # Creazione della tabella con una lista di righe
@@ -436,6 +475,11 @@ class ParameterValidator:
         """
         if not isinstance(strg, str):
             raise TypeError("Description must be a string!")
+    
+    @staticmethod
+    def validate_constrain(value: 'Constrain') -> None:
+        if not isinstance(value, Constrain):
+            raise TypeError('Parameter constrain must be of type Constrain')
 
 
 
@@ -475,7 +519,7 @@ class ParameterHandler:
             "frozen_indeces",
             "not_frozen_indeces",
             "free_parameters",
-            "frozen_parameters",
+            "not_free_parameters",
         ]  # list of attributes names that are cached
         
         self._cache_builders = {
@@ -489,7 +533,7 @@ class ParameterHandler:
             "frozen_indeces": self._build_frozen_indeces,
             "not_frozen_indeces": self._build_not_frozen_indeces,
             "free_parameters": self._build_free_parameters,
-            "frozen_parameters":self._build_frozen_parameters
+            "not_free_parameters":self._build_not_free_parameters
         }
         
         assert len(self._cached_propreties) == len(self._cache_builders)
@@ -596,10 +640,13 @@ class ParameterHandler:
             if self._binary_freeze_map[i] is False
         ]
     def _build_free_parameters(self) -> List[Parameter]:
-        return [p for p in self if p.frozen is False]
+        '''
+        NOTE: this do not return only not-frozen params, but also unconstreined params
+        '''
+        return [p for p in self if p.is_free]
     
-    def _build_frozen_parameters(self) -> List[Parameter]:
-        return [p for p in self if p.frozen is True]
+    def _build_not_free_parameters(self) -> List[Parameter]:
+        return [p for p in self if p.is_free is False]
 
     @property
     def is_inside_model(self) -> bool:
@@ -698,22 +745,22 @@ class ParameterHandler:
         
 
     @property
-    def frozen_parameters(self) -> List["Parameter"]:
+    def not_free_parameters(self) -> List["Parameter"]:
         """
         Ritorna solo i parametri congelati.
 
         Returns:
             List[Parameter]: Lista dei parametri congelati.
         """
-        return self._cache.get("frozen_parameters", self._build_frozen_parameters())
+        return self._cache.get("not_free_parameters", self._build_not_free_parameters())
         
-    
+    # deprecated
     @property
     def _binary_freeze_map(self) -> List[bool]:
         # possibile da cachare
         return self._cache.get("binary_freeze_map", self._build_binary_freeze_map())
         
-
+    # deprecated
     @property
     def _binary_melt_map(self) -> List[bool]:
         # possibile da cachare
@@ -722,14 +769,12 @@ class ParameterHandler:
     
     @property
     def not_frozen_indeces(self):
-        return self._cache.get(
-            "not_frozen_indeces", self._build_not_frozen_indeces())
+        return self._cache.get("not_frozen_indeces", self._build_not_frozen_indeces())
         
 
     @property
     def frozen_indeces(self):
-        return self._cache.get(
-            "frozen_indeces", self._build_frozen_indeces())
+        return self._cache.get("frozen_indeces", self._build_frozen_indeces())
        
        
     def _map_name_to_index(self, key: str) -> int:
@@ -951,7 +996,7 @@ class ParameterHandler:
         """
         
         # Definizione delle intestazioni
-        field_names = ["NAME", "VALUE", "PRIOR", "FROZEN", "DESCR"]
+        field_names = ["NAME", "VALUE", "PRIOR", "IS-FREE", "DESCR"]
 
         # Preparazione dei dati
         table_data = []
@@ -960,7 +1005,7 @@ class ParameterHandler:
             value = str(param.value) if param.value is not None else "None"
             #bounds = str(param.bounds) if param.bounds is not None else "None"
             prior_str = param.prior._get_str()
-            frozen = "Yes" if param.frozen else "No"
+            frozen = "Yes" if param.is_free else "No"
 
             # Aggiungiamo la riga dei dati
             table_data.append([name, value, prior_str, frozen, param.description])
@@ -1005,3 +1050,122 @@ class ParameterHandler:
             ValuesView: Vista dei valori del gestore.
         """
         return self._parameters.values()
+
+
+class Constrain:
+    '''
+    A constrain must implement 2 very important methods:
+    1) __call__ to allow a callable to talk with a parameter
+    2) reduce_varys to know if the affected parameter should be fitted or not
+    eg: a parameter that is forced to share a value with another is no longer free 
+    '''
+    def __init__(self, name,*,reduce_varys=False):
+        self.name = name
+        self._reduce_varys = reduce_varys
+    
+    @property
+    def reduce_varys(self) -> Literal[False]:
+        """if this kind of constrains reduces the number of free params"""
+        return self._reduce_varys
+    
+    def __call__(self, *args, **kwargs):
+        '''logica della __call__ il primo args è il valore corrente del parametro'''
+        raise NotImplementedError('Single Constrains should implemente their method')
+    
+class FunctionConstrain(Constrain):
+    def __init__(self,func):
+        if not callable(func):
+            raise TypeError("Functional constrain must wrap a function (callable).")
+        
+        func_sign = func.__code__
+        N_args = func_sign.co_argcount
+        if N_args > 1:
+            raise ValueError(
+                "Functiona constrain function must take only 1 arg, consider using a TieConstrain"
+            )
+
+        super().__init__(name = func.__name__, reduce_varys=False)
+        self._func = func
+        
+    
+    @property
+    def func(self):
+        return self._func
+    
+    @func.setter
+    def func(self, value):
+        if not callable(value):
+            raise TypeError('Functional constrain must wrap a funtion')
+        
+        func_sign = value.__code__
+        N_args = func_sign.co_argcount
+        if N_args > 1:
+            raise ValueError('Functiona constrain function must take only 1 arg, consider using a TieConstrain')
+        
+        
+    def __call__(self, *args, **kwargs):
+        return self.func(*args, **kwargs)
+    
+    
+class TieConstrain(Constrain):
+    def __init__(self, func, param):
+        # Controllo che `func` sia callable
+        if not callable(func):
+            raise TypeError("Functional constrain must wrap a function (callable).")
+
+        # Verifica la firma della funzione
+        # func_sign = func.__code__
+        # N_args = func_sign.co_argcount
+
+        # if N_args < 2:
+        #     raise ValueError(
+        #         "TieConstrain func needs 2 args, consider using a FunctionConstrain"
+        #     )
+        # if N_args > 2:
+        #     raise NotImplementedError(
+        #         "TieConstrain does not support functions with more than 2 arguments."
+        #     )
+
+        # # Controllo che `param` sia una stringa
+        # if not isinstance(param, str):
+        #     raise TypeError("Param name must be a string.")
+
+        # Inizializzazione del parent e dei membri
+        super().__init__(name=func.__name__, reduce_varys=True)
+        self._param = param
+        self._func = func
+        
+    @property
+    def func(self):
+        return self._func
+
+    @func.setter
+    def func(self, value):
+        if not callable(value):
+            raise TypeError("Functional constrain must wrap a funtion")
+        
+        # func_sign = value.__code__
+        # N_args = func_sign.co_argcount
+
+        # if N_args < 2:
+        #     raise ValueError('TieConstrain func needs 2 args, consider using a FunctionConstrain')
+        # if N_args > 2:
+        #     raise NotImplementedError(
+        #         "TieConstrain do not support multiple parameters tie for func with > 2 args"
+        #     )
+        self._func = value
+
+    @property
+    def param(self):
+        return self._param
+    
+    @param.setter
+    def param(self, value):
+        if not isinstance(value, str):
+            raise TypeError('Param name must be string')
+        self._param = value
+    
+    def __call__(self, *args, **kwargs):
+        return self.func(*args, **kwargs)
+        
+

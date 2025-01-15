@@ -5,7 +5,10 @@ from typing import Union, Dict, Optional
 import emcee
 import corner
 
+from model import Model
+
 class MCMCResult:
+    #TODO riscrivere questa classe che fa proprio merda
     """
     Classe che raccoglie e gestisce i risultati di un fitting MCMC.
     L'utente deve passare un 'sampler' (es. emcee.EnsembleSampler),
@@ -287,6 +290,11 @@ class MCMC:
         # NOTE currently to discuss
         if self.model.n_outputs > 1:
             raise NotImplementedError('Multiple outputs are not currentrly supported')
+        
+        #if self.model.has_constrains:
+        self.loglike = self.unconstrained_loglike
+        #else:
+        #self.loglike = self.constrained_loglike
 
     @property
     def model(self):
@@ -299,6 +307,11 @@ class MCMC:
             Il modello utilizzato per la stima MCMC.
         """
         return self._model
+    
+    @model.setter
+    def model(self, value):
+        if not isinstance(value, Model):
+            raise TypeError('Model to be optimize must be istance of class Model')
 
     def logprior(self, theta: np.ndarray) -> float:
         """
@@ -319,8 +332,12 @@ class MCMC:
         """
         return sum(param(val) for param, val in zip(self.model.free_parameters, theta))
         
-
-    def loglike(
+    def constrained_loglike(self, theta, xdata, ydata, yerr) -> float:
+        '''loglike function but for constrained parameters'''
+        # map constrains to relative args
+        raise NotImplementedError('Please boss, I m tired')
+    
+    def unconstrained_loglike(
         self,
         theta: np.ndarray,
         xdata: Union[list, np.ndarray],
@@ -349,17 +366,9 @@ class MCMC:
         """
         # Calcolo del modello
         #
-        #NOTE place  here possible constrains
-        #like:
-        #for i, param in enumerate(self.model):
-        #   if param.is_constrained:
-        #       theta[i] = param.constrain(theta[i])
-        #
-        #theta = self.model.apply_constrains(theta)
-        ymodel = self.model.call([xdata], *theta)
-        # Residui e calcolo della likelihood
-        #residuals = ydata - ymodel
-        #ln = -0.5 * np.sum((residuals/ yerr)**2)# + np.log(2 * np.pi * yerr**2))
+        
+        ymodel = self.model.call(xdata, *theta)
+       
         return -0.5 * np.nansum(((ydata - ymodel) / yerr) ** 2)
 
     def log_probability(
@@ -442,8 +451,9 @@ class MCMC:
                 )
                 # Controlla se tutti i parametri rispettano i bound
                 if all(
-                    lower <= value <= upper
-                    for value, (lower, upper) in zip(candidate, bounds)
+                    np.isfinite(p.prior(p.value)) for p in self.model.free_parameters 
+                    #lower <= value <= upper
+                    #for value, (lower, upper) in zip(candidate, bounds)
                 ):
                     return candidate
 
@@ -513,7 +523,7 @@ class MCMC:
             initial = {**self.model.parameters_values_dict}
             for pname, pval in theta0.items():
                 param = self.model[pname]
-                if param.frozen:
+                if not param.is_free:
                     raise ValueError(
                         f"Il parametro '{pname}' è frozen. Fornire solo valori per parametri free."
                     )
@@ -554,7 +564,7 @@ class MCMC:
         return theta0, grid
 
     def _look_invalid_initial_points(self, theta):
-        names = [name for name in self.model.parameters_keys if self.model[name].frozen is False]
+        names = [name for name in self.model.parameters_keys if self.model[name].is_free]
         assert len(names) == len(theta)
         
         for name, val in zip(names, theta):
@@ -574,16 +584,17 @@ class MCMC:
         discard: int = 100,
         dispersion: float | int = 0.1,
         optimize: bool = False,
+        progress: bool = True,
+        thin: int = 1,
         **kwargs,
-    ):
+    ) -> MCMCResult:
         # TODO modificare dispersion e initial pointin modo da permettere di avere come input direttamente l'array corretto come emcee
         """
         Esegue il fitting MCMC del modello sui dati forniti.
 
         Parameters
         ----------
-        grid : array-like
-            Grid (indipendente) su cui valutare il modello (es. asse x).
+        
         data : array-like
             Dati osservati corrispondenti alla valutazione del modello su `grid`.
         theta0 : list or np.ndarray or dict, optional
@@ -636,7 +647,7 @@ class MCMC:
                 lambda xtheta, xgrid, xdata, err: -self.log_probability(xtheta, xgrid, xdata, err),
                 x0=theta0,
                 args=(grid, data, error),
-                bounds=[p.bounds for p in self.model if not p.frozen],
+                bounds=[p.bounds for p in self.model if p.is_free],
                 
             )
             if initial_point.success:
@@ -649,12 +660,14 @@ class MCMC:
             dispersion=dispersion,
             theta0=theta0,
             nwalkers=nwalkers,
-            bounds=[p.bounds for p in self.model if not p.frozen],
+            bounds=[p.bounds for p in self.model if p.is_free],
         )
 
         nwalkers, ndim = init_positions.shape
-
+        assert ndim == len(self.model.free_parameters)
         # Inizializza il sampler di emcee
+        # check for cnstrained parameters:
+        
         sampler = emcee.EnsembleSampler(
             nwalkers,
             ndim,
@@ -665,11 +678,11 @@ class MCMC:
 
         # setattr( sampler, "log_prob_fn",lambda p: self.log_probability(p, grid, data, error))
         # Esecuzione MCMC vera e propria
-        sampler.run_mcmc(init_positions, nsteps, progress=True, **kwargs)
+        sampler.run_mcmc(init_positions, nsteps, progress=progress, **kwargs)
 
         # Prepara i nomi dei parametri
         labels = [
-            key for key in self.model.parameters_keys if not self.model[key].frozen
+            key for key in self.model.parameters_keys if self.model[key].is_free
         ]
 
         
@@ -682,10 +695,12 @@ class MCMC:
             data=data,
             var_names=labels,  # lista dei nomi
             discard=discard,  # burn-in
-            thin=1,  # thinning
+            thin=thin,  # thinning
             success=True,
             message="MCMC sampling completed successfully",
         )
+        if optimize:
+            result.__setattr__('linear_bf', initial_point.x)
 
         #
 

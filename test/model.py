@@ -3,14 +3,15 @@ import inspect
 from copy import deepcopy
 import warnings
 from parameter import Parameter, ParameterHandler
-from typing import Callable, Dict, List,  Tuple
+from typing import Any, Callable, Dict, List,  Tuple
 #from io import StringIO
 from collections  import OrderedDict
 #from itertools import islice
 import operator
 from tabulate import tabulate
 
-
+__all__ = ['Model',
+           'CompositeModel']
 
 def componemodels(op, **kwargs) -> Callable[..., 'CompositeModel']:
     return lambda left, right: CompositeModel(left, right, op, **kwargs)
@@ -44,7 +45,10 @@ class Model:
 
     def _update_cache(self, key=None, value=None) -> None:        
         self._parameters._update_cache(key, value)
-        self._partial = partial(self._callable, **self.parameters_values_dict)
+
+        # CompositeModel has callable = None
+        if self._callable is not None:
+            self._partial = partial(self._callable, **self.parameters_values_dict)
 
     # POINTER PROPRIETA
     @property
@@ -106,8 +110,8 @@ class Model:
         return self.parameters.parameters_values_dict
 
     @property
-    def frozen_parameters(self) -> List[Parameter]:
-        return self.parameters.frozen_parameters
+    def not_free_parameters(self) -> List[Parameter]:
+        return self.parameters.not_free_parameters
 
     @property
     def n_free_parameters(self) -> int:
@@ -121,7 +125,10 @@ class Model:
     @property
     def _binary_melt_map(self) -> List[bool]:
         return self.parameters._binary_melt_map
-        
+    
+    @property
+    def has_constrains(self):
+        return any(p.is_constrained for p in self)
 
 
     # Simple Model is a leaf
@@ -228,24 +235,7 @@ class Model:
         self._set_frozen_state(True, *args)
         self._update_cache()
         # AGGIORNO CACHE
-        #self._update_cache(key="binary_freeze_map", value=[p.frozen for p in self])
-        #self._update_cache(key="binary_melt_map", value=[not p.frozen for p in self])
-        #self._update_cache(
-        #    key="not_frozen_indeces",
-        #    value=[
-        #        i
-        #        for i in range(len(self._binary_freeze_map))
-        #        if self._binary_freeze_map[i] is False
-        #    ],
-        #)
-        #self._update_cache(
-        #    key="frozen_indeces",
-        #    value=[
-        #        i
-        #        for i in range(len(self._binary_freeze_map))
-        #        if self._binary_freeze_map[i] is True
-        #    ],
-        #)
+        
 
     def unfreeze_parameters(self, *args) -> None:
         """
@@ -261,24 +251,7 @@ class Model:
         self._set_frozen_state(False, *args)
         self._update_cache()
         # AGGIORNO CACHE
-        #self._update_cache(key="binary_freeze_map", value=[p.frozen for p in self])
-        #self._update_cache(key="binary_melt_map", value=[not p.frozen for p in self])
-        #self._update_cache(
-        #    key="not_frozen_indeces",
-        #    value=[
-        #        i
-        #        for i in range(len(self._binary_freeze_map))
-        #        if self._binary_freeze_map[i] is False
-        #    ],
-        #)
-        #self._update_cache(
-        #    key="frozen_indeces",
-        #    value=[
-        #        i
-        #        for i in range(len(self._binary_freeze_map))
-        #        if self._binary_freeze_map[i] is True
-        #    ],
-        #)
+        
 
     @staticmethod
     def _extract_params(method, default_value=1, **kwargs) -> tuple[list[str], list[float], list[bool]]:
@@ -490,7 +463,7 @@ class Model:
         )
 
         # Creazione dei dati per la tabella
-        field_names = ["INDEX", "NAME", "VALUE", "FROZEN", "PRIOR", "DESCR"]
+        field_names = ["INDEX", "NAME", "VALUE", "IS-FREE", "PRIOR", "DESCR"]
         table_data = []
 
         for i, param in enumerate(self._parameters):
@@ -501,7 +474,7 @@ class Model:
             #    else "None"
             #)
             prior_str = param.prior._get_str()
-            frz = "Yes" if param.frozen else "No"
+            frz = "Yes" if param.is_free else "No"
 
             # Aggiungiamo i dati del parametro come riga
             table_data.append([i, param.name, value_str, frz, prior_str, param.description])
@@ -547,19 +520,25 @@ class Model:
         for i, val in enumerate(args):
             final_kwargs[self.free_parameters[i].name] = val
 
-        # Parametri congelati (frozen parameters)
-        # Qui non creiamo nuovi oggetti, iteriamo direttamente sui parametri congelati
-        # e assegnamo i valori al dizionario.
-        for p in self.frozen_parameters:
-            # Se il param. era già stato impostato via args (potenzialmente non avviene mai),
-            # viene sovrascritto qui con il valore congelato.
+        for p in self.not_free_parameters:
             final_kwargs[p.name] = p.value
-
+            
+        # resolve params constrains
+        for key, value in final_kwargs.items():
+            # BUG the constrain is called with the current value and not the param value?
+            if self[key].has_constrain:                
+                final_kwargs[key] = self[key].constrain(value, final_kwargs[self[key].constrain.param])
+        #         # call(mu, sigma)
+        #         print(
+        #             f"param {key}, value = {value}, constr = {self[key].constrain(value, final_kwargs[self[key].constrain.param])}"
+        #         )
+                
         return final_kwargs
 
 
     def call(self, grid, *args):
         """
+        TODO: modificare la function in modo da suportare i parametri tied
         Chiama la funzione `_callable` in un contesto di ottimizzazione:
         - `grid`: variabili di griglia passate come argomenti posizionali.
         - `args`: vettore dei parametri liberi nell'ordine in cui sono definiti.
@@ -567,13 +546,12 @@ class Model:
 
         La validazione di `args` e la preparazione degli argomenti finali sono metodi distinti.
         """
-        #print(self.name, " got", args)
         final_args = self.validate_args(args)
-        #print(f"{self.name} got {args}, {final_args}")
         return self._callable(*grid, **final_args)
     
-    def __call__(self,*args,**kwargs):
+    def __call__(self,*args,**kwargs) -> Any:
         return self._partial(*args, **kwargs)
+    
     
         
     #def __call__(self, *args, **kwargs):
@@ -599,19 +577,11 @@ class Model:
     #    return self._callable(**tmp)
 
     def __getitem__(self, name: str) -> Parameter:
-        #print('getting')
         return self.parameters[name]
 
     def __setitem__(self, key, value: Parameter) -> None:
-        #print('Updated', self.name)
         self.parameters.__setitem__(key, value)
-        #self._update_cache()
-        #if self.left:
-        #    self.left._update_cache()
-        #if self.right:
-        #    self.right._update_cache()
         
-        #return self.parameters.__setitem__(key, value)
 
     def __contains__(self, key: str) -> bool:
         return self.parameters.__contains__(key)
@@ -861,7 +831,7 @@ class CompositeModel(Model):
         )
 
         # Creazione dei dati per la tabella
-        field_names = ["INDEX", "NAME", "VALUE", "FROZEN", "PRIOR", "DESCR"]
+        field_names = ["INDEX", "NAME", "VALUE", "IS-FREE", "PRIOR", "DESCR"]
         table_data = []
 
         for i, (param_name, param) in enumerate(self.parameters.items()):
@@ -872,7 +842,7 @@ class CompositeModel(Model):
             #    else "None"
             #)
             prior_str = param.prior._get_str()
-            frz = "Yes" if param.frozen else "No"
+            frz = "Yes" if param.is_free else "No"
 
             # Aggiungiamo i dati del parametro come riga
             table_data.append(
@@ -938,11 +908,12 @@ class CompositeModel(Model):
 
         # Calcola gli args per `right`
         right_args = args[left_end:]
+        
         return left_args, right_args
     
     def _map_args_to_free_params(self, args):
-        if len(args) <= len(self.grid_variables):
-            return (), ()
+        #if len(args) <= len(self.grid_variables) or self.n_free_parameters == 0:
+        #    return (), ()
 
         # Calcola gli args per `left`, tenendo conto dell'offset della griglia
         left_end = self.left.n_free_parameters
@@ -971,9 +942,6 @@ class CompositeModel(Model):
         left_args, right_args = self._map_args(args)
         left_kwargs, right_kwargs = self._map_kwargs(kwargs)
         
-        #print(left_args, right_args)
-        #print(left_kwargs, right_kwargs)
-        #print(grid)
         
         if self.op_str in self.LINEAR_OPERATIONS:
             return self._operator(
@@ -989,161 +957,6 @@ class CompositeModel(Model):
                 return self.right.evaluate(left_res,*right_args, **right_kwargs)
             
     def call(self, grid, *args):
-        if len(args) != self.n_free_parameters:
-            raise ValueError(
-                # f"Troppi argomenti forniti per i parametri liberi. "
-                f"expected {self.n_free_parameters} args, got {len(args)}."
-            )
-        left_args, right_args = self._map_args_to_free_params(args)
-        
-        if self.op_str in self.LINEAR_OPERATIONS:
-            return self._operator(
-                self.left.call(grid, *left_args),
-                self.right.call(grid, *right_args),
-            )
-
-        elif self.op_str == self.COMPOSITE_OPERATION:
-            left_res = self.left.call(grid, *left_args)
-            if isinstance(left_res, tuple):
-                return self.right.call(left_res, *right_args)
-            else:
-                return self.right.call([left_res], *right_args)
-    
-    def __call__(self, *args, **kwargs):
-        grid = []
-        for i, grid_name in enumerate(self.grid_variables):
-            if grid_name not in kwargs:
-                grid.append(args[i])
-            else:
-                grid.append(kwargs.pop(grid_name))
-                
-        left_vals, right_vals = self._map_kwargs(kwargs)
-        #print(left_vals)
-        #print(right_vals)
-        if self.op_str in self.LINEAR_OPERATIONS:
-            return self._operator(
-                self.left(*grid, **left_vals),
-                self.right(*grid, **right_vals),
-            )
-
-        elif self.op_str == self.COMPOSITE_OPERATION:
-            left_res = self.left(*grid, **left_vals)
-
-            if isinstance(left_res, tuple):
-                return self.right(*left_res, **right_vals)
-            else:
-                return self.right(left_res, **right_vals)
-        
-    
-    '''def __call__(self, *args, **kwargs):
-        """
-        Chiama il modello composito come fosse una funzione.
-
-        Questo metodo è pensato per un utilizzo più "diretto" e user-friendly. Accetta:
-        - `args`: I primi `len(self.grid_variables)` argomenti vengono interpretati come variabili di griglia.
-        - `kwargs`: Può contenere valori per parametri che non sono congelati. Se un parametro è congelato,
-
-        Args:
-            *args: Valori posizionali, i primi `len(self.grid_variables)` sono le variabili di griglia.
-            **kwargs: Eventuali coppie chiave=valore per aggiornare i parametri non congelati.
-
-        Returns:
-            Il risultato della funzione combinata `left` e `right` secondo l'operatore `op_str`.
-        """
-        grid = []
-        for i, grid_name in enumerate(self.grid_variables):
-            if grid_name not in kwargs:
-                grid.append(args[i])
-            else:
-                grid.append(kwargs.pop(grid_name))
-
-        tmp = {**self.parameters_values_dict, **kwargs}
-        left_vals, right_vals = self._map_kwargs(tmp)
-        
-
-        if self.op_str in self.LINEAR_OPERATIONS:
-            return self._operator(
-                self.left.evaluate(*grid, **left_vals),
-                self.right.evaluate(*grid, **right_vals),
-            )
-
-        elif self.op_str == self.COMPOSITE_OPERATION:
-            left_res = self.left.evaluate(*grid, **left_vals)
-
-            if isinstance(left_res, tuple):
-                return self.right.evaluate(*left_res, **right_vals)
-            else:
-                return self.right.evaluate(left_res, **right_vals)
-
-        raise ValueError(f"Unknown operation: {self.op_str}")'''
-        
-    '''def evaluate(self, *args, **kwargs):
-        """
-        Valuta il modello composito utilizzando i valori forniti come input.
-
-        Questo metodo si limita a comporre il risultato dell'evaluate del modello `left` e `right`
-        utilizzando l'operatore specificato. La composizione è trasparente, ossia i parametri del
-        modello composito vengono suddivisi tra `left` e `right`, e poi i due risultati vengono
-        combinati. Nel caso di un'operazione composita (COMPOSITE_OPERATION), l'output di `left`
-        viene passato come input a `right`.
-
-        Args:
-            *args: Valori posizionali per le variabili della griglia. Il numero di variabili di griglia
-                è tipicamente `len(self.grid_variables)`.
-            **kwargs: Coppie chiave=valore per impostare i parametri del modello. Eventuali parametri
-                    forniti qui sovrascrivono quelli già presenti in `parameters_values_dict`.
-
-        Returns:
-            Il risultato dell'evaluazione del modello composito, che può essere uno scalare o un array
-            a seconda della funzione `_callable` di `left` e `right`.
-        """
-        # Costruzione della griglia e del dizionario dei parametri
-        
-        #print(self._map_kwargs(kwargs))
-        #print(self._map_args(args))
-        grid = []
-        k = 0
-        for i, name in enumerate(self.grid_variables):
-            if name in kwargs:
-                grid.append(kwargs.pop(name))
-            else:
-                k += 1
-                grid.append(args[i])
-                
-        #tmp = {**self.parameters_values_dict, **kwargs}
-        tmp = {key:val for key,val in zip(self.parameters_keys, args[k:])}
-        tmp.update(**kwargs)
-
-        # Prepara gli iteratori per dividere i parametri tra left e right
-        tmp_values = iter(tmp.values())
-        left_keys, right_keys = self.left.parameters_keys, self.right.parameters_keys
-
-        # Dividi i parametri tra left e right
-        left_vals = dict(zip(left_keys, islice(tmp_values, self.left.n_inputs)))
-        right_vals = dict(zip(right_keys, tmp_values))
-
-        # Se l'operatore è lineare
-        if self.op_str in self.LINEAR_OPERATIONS:
-            return self._operator(
-                self.left.evaluate(*grid, **left_vals),
-                self.right.evaluate(*grid, **right_vals),
-            )
-
-        # Se l'operatore è composito
-        elif self.op_str == self.COMPOSITE_OPERATION:
-            left_res = self.left.evaluate(*grid, **left_vals)
-            if isinstance(left_res, tuple):
-                return self.right.evaluate(*left_res, **right_vals)
-            else:
-                return self.right.evaluate(left_res, **right_vals)
-
-        # Operatore sconosciuto
-        raise ValueError(f"Unknown operation: {self.op_str}")'''
-
-    
-        
-
-    '''def call(self, grid, *args):
         """
         Chiama il modello in un contesto, ad esempio, di ottimizzazione,
         dove `args` rappresentano i valori per i parametri liberi nell'ordine in cui sono definiti.
@@ -1172,29 +985,52 @@ class CompositeModel(Model):
                 #f"Troppi argomenti forniti per i parametri liberi. "
                 f"expected {self.n_free_parameters} args, got {len(args)}."
             )
+            
+        tmp = {}    # do not populate the dict twice but once
 
+        i = 0
+        for key in self.parameters_keys:
+            if self[key].is_free:
+                tmp[key] = args[i]
+                i += 1
+            else:
+                tmp[key] = self.parameters_values_dict[key]
 
+        
+        # now solve the constrains
+        for key, param in zip(self.parameters_keys, self):
+            if param.has_constrain:
+                # print(
+                #     f"param {key} with val {tmp[key]} is map to param {param.constrain.param} with val {tmp[param.constrain.param]} to a val of {param.constrain(tmp[param.constrain.param])}"
+                # )
+                # print(f'test value 100: {param.constrain(100)}')
+                tmp[key] = param.constrain(tmp[param.constrain.param])
+                
+        left, right = self._map_kwargs(tmp)
+        
         # Prepara i parametri finali
-        tmp = list({**self.parameters_values_dict}.values())
-
+        #tmp = list({**self.parameters_values_dict}.values())
+        
         # Identifica gli indici dei parametri liberi
-        indices = [i for i in range(len(self._binary_melt_map)) if self._binary_melt_map[i]]
-        for idx, value in zip(indices, args):
-            tmp[idx] = value
-
+        #indices = [i for i in range(len(self._binary_melt_map)) if self._binary_melt_map[i]]
+        #for idx, value in zip(indices, args):
+        #    tmp[idx] = value
+            
+        
         # Suddivisione dei parametri tra left e right
-        left = {
-            key: val
-            for key, val in zip(self.left.parameters_keys, tmp[: self.left.n_parameters])
-        }
-        right = {
-            key: val
-            for key, val in zip(self.right.parameters_keys, tmp[self.left.n_parameters:])
-        }
+        # left = {
+        #     key: val
+        #     for key, val in zip(self.left.parameters_keys, tmp[: self.left.n_parameters])
+        # }
+        # right = {
+        #     key: val
+        #     for key, val in zip(self.right.parameters_keys, tmp[self.left.n_parameters:])
+        # }
+        
+        #print(tmp)
         #print(left)
-        #print(tmp, tmp[self.left.n_parameters :])
         #print(right)
-        # Chiamata ricorsiva ai modelli figli
+        
         if self.op_str in self.LINEAR_OPERATIONS:
             return self._operator(
                 self.left.evaluate(*grid, **left),
@@ -1208,11 +1044,54 @@ class CompositeModel(Model):
             else:
                 return self.right.evaluate(left_res, **right)
 
-        raise ValueError(f"Unknown operation: {self.op_str}")'''
+        raise ValueError(f"Unknown operation: {self.op_str}")
+            
+    # def call(self, grid, *args):
+    #     if len(args) != self.n_free_parameters:
+    #         raise ValueError(
+    #             # f"Troppi argomenti forniti per i parametri liberi. "
+    #             f"expected {self.n_free_parameters} args, got {len(args)}."
+    #         )
+    #     left_args, right_args = self._map_args_to_free_params(args)
+        
+    #     if self.op_str in self.LINEAR_OPERATIONS:
+    #         return self._operator(
+    #             self.left.call(grid, *left_args),
+    #             self.right.call(grid, *right_args),
+    #         )
 
+    #     elif self.op_str == self.COMPOSITE_OPERATION:
+    #         left_res = self.left.call(grid, *left_args)
+    #         if isinstance(left_res, tuple):
+    #             return self.right.call(left_res, *right_args)
+    #         else:
+    #             return self.right.call([left_res], *right_args)
     
-    
-    
+    def __call__(self, *args, **kwargs):
+        grid = []
+        for i, grid_name in enumerate(self.grid_variables):
+            if grid_name not in kwargs:
+                grid.append(args[i])
+            else:
+                grid.append(kwargs.pop(grid_name))
+                
+        left_vals, right_vals = self._map_kwargs(kwargs)
+        #print(left_vals)
+        #print(right_vals)
+        if self.op_str in self.LINEAR_OPERATIONS:
+            return self._operator(
+                self.left(*grid, **left_vals),
+                self.right(*grid, **right_vals),
+            )
+
+        elif self.op_str == self.COMPOSITE_OPERATION:
+            left_res = self.left(*grid, **left_vals)
+
+            if isinstance(left_res, tuple):
+                return self.right(*left_res, **right_vals)
+            else:
+                return self.right(left_res, **right_vals)
+        
     
     def print_tree(self, prefix: str = "", is_last: bool = True) -> None:
         """
@@ -1261,13 +1140,6 @@ class CompositeModel(Model):
                 leaf_symbol = "`-- " if child_is_last else "|-- "
                 print(f"{new_prefix}{leaf_symbol}{child.name}")
                 
-    def __getitem__(self, name):
-        #if name in self._left_kwarg_map:
-        #    return self.left[self._left_kwarg_map[name]]
-        #elif name in self._right_kwarg_map:
-        #    return self.right[self._right_kwarg_map[name]]
-        #else:
-        #    raise ValueError('not present in model')
-        return super().__getitem__(name)
+    
                 
     
