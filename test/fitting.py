@@ -257,6 +257,10 @@ class MCMCResult:
 
 
 class MCMC:
+    #  TODO: add fine support for mcmc.sample instead of run_mcmc
+    #        allow for burn-in (to replace discard)
+    #        add supporto for different types of moves
+    #        add support for Pool
     """
     Classe wrapper di base per l'utilizzo dell'algoritmo MCMC (Markov Chain Monte Carlo)
     tramite la libreria `emcee`.
@@ -653,6 +657,8 @@ class MCMC:
             if initial_point.success:
                 print(f"Optimization done, initial position is {initial_point.x}")
                 theta0 = initial_point.x
+            else:
+                print('initial optimization failed')
             # raise NotImplementedError('Prior Optimization not implemented yet')
 
         # Genera posizioni iniziali per i walker

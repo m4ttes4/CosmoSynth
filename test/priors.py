@@ -96,5 +96,11 @@ class UniformPrior(Prior):
     
     def _get_str(self) -> str:
         'Helper func to get string representative of the prior'
-        return f"Uniform({self.lower}, {self.upper})"
+        def format_value(value):
+            return f"{value:.1e}" if value > 1000 or value < 0.001 else f"{value:.1f}"
+        
+        lower_str = format_value(self.lower)
+        upper_str = format_value(self.upper)
+        return f"Uniform({lower_str}, {upper_str})"
+
         

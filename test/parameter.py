@@ -1113,24 +1113,6 @@ class TieConstrain(Constrain):
         if not callable(func):
             raise TypeError("Functional constrain must wrap a function (callable).")
 
-        # Verifica la firma della funzione
-        # func_sign = func.__code__
-        # N_args = func_sign.co_argcount
-
-        # if N_args < 2:
-        #     raise ValueError(
-        #         "TieConstrain func needs 2 args, consider using a FunctionConstrain"
-        #     )
-        # if N_args > 2:
-        #     raise NotImplementedError(
-        #         "TieConstrain does not support functions with more than 2 arguments."
-        #     )
-
-        # # Controllo che `param` sia una stringa
-        # if not isinstance(param, str):
-        #     raise TypeError("Param name must be a string.")
-
-        # Inizializzazione del parent e dei membri
         super().__init__(name=func.__name__, reduce_varys=True)
         self._param = param
         self._func = func
@@ -1144,15 +1126,6 @@ class TieConstrain(Constrain):
         if not callable(value):
             raise TypeError("Functional constrain must wrap a funtion")
         
-        # func_sign = value.__code__
-        # N_args = func_sign.co_argcount
-
-        # if N_args < 2:
-        #     raise ValueError('TieConstrain func needs 2 args, consider using a FunctionConstrain')
-        # if N_args > 2:
-        #     raise NotImplementedError(
-        #         "TieConstrain do not support multiple parameters tie for func with > 2 args"
-        #     )
         self._func = value
 
     @property

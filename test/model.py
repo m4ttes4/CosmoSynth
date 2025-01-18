@@ -10,6 +10,13 @@ from collections  import OrderedDict
 import operator
 from tabulate import tabulate
 
+# TODO implements custom models error to better use try: except:
+# TODO add constrain support to __call__ in order to call log_prob_func with **kwargs
+# NOTE constrain possono anche essere implementati come il pipe operator
+# ex: se faccio funzione che prende tutti input del modello, modifica solo n-esimo secondo il constrain
+#       e poi faccio pipe con modello.
+#       questo vuol dire modificare la logica di pipe per fare in modo che sia corretta secondo questa nuova logica
+
 __all__ = ['Model',
            'CompositeModel']
 
@@ -724,7 +731,7 @@ class CompositeModel(Model):
             #    raise ValueError("Number of dimensions do not match!")
 
             n_dim = self.left.n_dim
-            n_inputs = self.left.n_inputs
+            n_inputs = self.left.n_inputs   #wrong?
             n_outputs = self.right.n_outputs
 
         return n_dim, n_inputs, n_outputs
