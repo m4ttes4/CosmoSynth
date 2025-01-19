@@ -17,21 +17,6 @@ from tabulate import tabulate
 #       e poi faccio pipe con modello.
 #       questo vuol dire modificare la logica di pipe per fare in modo che sia corretta secondo questa nuova logica
 
-'''
-TEST: aggiungere un layer che contiene i constrain.
-esempio: classe Layer che applica i constrain
-model.add constrain
-mantenere differenza tra Tied e Functional in modo da considerare correttamente parametri liberi e non
-i constrain si aggiungono al modello e non al parametro
-l'API deve intercettare il parametro (dentro l'handler) e freezarlo in accordo col constrain
-LIMITI: se metto il constrain su modello composito, il sottomodello adesso ha un parametro freezato anche
-se preso da solo.
-'''
-
-class ConstrainLayer:
-    pass
-
-
 __all__ = ['Model',
            'CompositeModel']
 
@@ -61,9 +46,9 @@ class Model:
         self._callable = func
         self._name = name
         self._grid_variables = []  # Inizializza _grid_variables nel costruttore
+        #self._cache = {}  # cache base
         self._partial = partial(self._callable, **self.parameters_values_dict)
         
-        #self.constrains = []
 
     def _update_cache(self, key=None, value=None) -> None:        
         self._parameters._update_cache(key, value)
@@ -517,13 +502,6 @@ class Model:
         """
         return self._callable(*args, **kwargs)
     
-    def _apply_constrains(self, kwargs):
-        if self.has_constrains:
-            for layer in self:
-                if self.has_constrains:
-                    kwargs = layer(kwargs)
-        return kwargs
-    
     def validate_args(self, args):
         """
         Prepara i parametri finali per la chiamata `_callable`.
@@ -551,10 +529,16 @@ class Model:
 
         for p in self.not_free_parameters:
             final_kwargs[p.name] = p.value
-        
-        # resolve constrains
-        final_kwargs = self._apply_constrains(final_kwargs)
-        
+            
+        # resolve params constrains
+        for key, value in final_kwargs.items():
+            # BUG the constrain is called with the current value and not the param value?
+            if self[key].has_constrain:                
+                final_kwargs[key] = self[key].constrain(value, final_kwargs[self[key].constrain.param])
+        #         # call(mu, sigma)
+        #         print(
+        #             f"param {key}, value = {value}, constr = {self[key].constrain(value, final_kwargs[self[key].constrain.param])}"
+        #         )
                 
         return final_kwargs
 
@@ -576,6 +560,28 @@ class Model:
         return self._partial(*args, **kwargs)
     
     
+        
+    #def __call__(self, *args, **kwargs):
+    #    '''
+    #    Function to call the model once the function is wrapped
+    #    args:
+    #        the first ndim elements are the grid
+    #    kwargs:
+    #        keyword arguments to overload the default values
+    #    '''
+    #    if len(args) > len(self.grid_variables):
+    #        raise ValueError(f'To much args for the grid, expected {len(self.grid_variables)} but got {len(args)}')
+    #    
+    #    tmp = {}
+    #    
+    ##    for i, grid_name in enumerate(self.grid_variables):
+    ##        if grid_name not in kwargs:
+    ##            tmp[grid_name] = args[i]
+    #            
+    #    tmp.update(**self.parameters_values_dict)
+    #    tmp.update(**kwargs)#
+
+    #    return self._callable(**tmp)
 
     def __getitem__(self, name: str) -> Parameter:
         return self.parameters[name]
