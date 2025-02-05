@@ -71,7 +71,7 @@ class Parameter:
         description: str = "",
         prior:Prior = None,
         #handler: 'ParameterHandler' = None
-        constrain:'Constrain' = None, # to be updated for fitting purposes
+        #constrain:'Constrain' = None, # to be updated for fitting purposes
     ) -> None:
         """
         Inizializza un nuovo parametro.
@@ -98,8 +98,10 @@ class Parameter:
         self._description = description
         self._handler = []
         self._chached_properties = ['value','bounds','frozen']
-        self._constrain = constrain
         
+        # legacy, devono essere modificate
+        self._constrain = False
+        self._is_tied = False
         
         if prior is None:
             self._prior = UniformPrior(-float('inf'), float('inf'))
@@ -118,23 +120,21 @@ class Parameter:
         
     @property
     def is_tied(self) -> bool:
-        if self.constrain is not None and self.constrain.reduce_varys:
-            return True
-        return False
+        #if self.constrain is not None and self.constrain.reduce_varys:
+        #    return True
+        return self._is_tied
     
-    @property
-    def constrain(self) -> 'Constrain':
-        return self._constrain
     
-    @constrain.setter
-    def constrain(self, value) -> None:
-        ParameterValidator.validate_constrain(value)
-        self._constrain = value
-        self._update_handler_cache()
+    
     
     @property
     def has_constrain(self) -> bool:
-        return True if self.constrain is not None else False
+        return self._constrain
+    
+    @has_constrain.setter
+    def has_constrains(self, value):
+        self._constrain = value
+        self._update_handler_cache()
     
     @property
     def handler(self) -> List['ParameterHandler']:
@@ -1076,46 +1076,49 @@ class FunctionConstrain(Constrain):
     def __init__(self,func):
         if not callable(func):
             raise TypeError("Functional constrain must wrap a function (callable).")
-        
-        func_sign = func.__code__
-        N_args = func_sign.co_argcount
-        if N_args > 1:
-            raise ValueError(
-                "Functiona constrain function must take only 1 arg, consider using a TieConstrain"
-            )
+    
 
         super().__init__(name = func.__name__, reduce_varys=False)
         self._func = func
         
-    
     @property
     def func(self):
         return self._func
-    
+
     @func.setter
     def func(self, value):
         if not callable(value):
-            raise TypeError('Functional constrain must wrap a funtion')
-        
-        func_sign = value.__code__
-        N_args = func_sign.co_argcount
-        if N_args > 1:
-            raise ValueError('Functiona constrain function must take only 1 arg, consider using a TieConstrain')
-        
-        
+            raise TypeError("Functional constrain must wrap a funtion")
+
+        self._func = value
+
     def __call__(self, *args, **kwargs):
         return self.func(*args, **kwargs)
     
     
+    
+   
+        
+    
+    
+    
+'''
+NOTE: come funziona:
+Tied legge args della funzione e li trasforma in key per il modello a cui è applicato
+quali params sono tied? il primo di default
+ora, dopo essere stato aggiunto al layer del modello, il primo args della funzione (la key del modello quindi)
+viene freezata
+'''
 class TieConstrain(Constrain):
-    def __init__(self, func, param):
+    def __init__(self, func, tied_param:str):
         # Controllo che `func` sia callable
         if not callable(func):
             raise TypeError("Functional constrain must wrap a function (callable).")
 
         super().__init__(name=func.__name__, reduce_varys=True)
-        self._param = param
         self._func = func
+        self.tied_param = tied_param
+            
         
     @property
     def func(self):
@@ -1127,17 +1130,7 @@ class TieConstrain(Constrain):
             raise TypeError("Functional constrain must wrap a funtion")
         
         self._func = value
-
-    @property
-    def param(self):
-        return self._param
-    
-    @param.setter
-    def param(self, value):
-        if not isinstance(value, str):
-            raise TypeError('Param name must be string')
-        self._param = value
-    
-    def __call__(self, *args, **kwargs):
+                               
+    def __call__(self, *args ,**kwargs):        
         return self.func(*args, **kwargs)
         

@@ -1,14 +1,17 @@
-import corner.corner
-import numpy as np
-#import pandas as pd
-from typing import Union, Dict, Optional
+from typing import Union
 import emcee
 import corner
-
 from model import Model
+from scipy.optimize import least_squares
+from functools import singledispatchmethod
+import corner.corner
+import numpy as np
+import corner
+
+__all__ = ['ChiSquareFitter','MCMC']
 
 class MCMCResult:
-    #TODO riscrivere questa classe che fa proprio merda
+    # TODO riscrivere questa classe che fa proprio merda
     """
     Classe che raccoglie e gestisce i risultati di un fitting MCMC.
     L'utente deve passare un 'sampler' (es. emcee.EnsembleSampler),
@@ -243,79 +246,228 @@ class MCMCResult:
         return "\n".join(lines)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-class MCMC:
-    #  TODO: add fine support for mcmc.sample instead of run_mcmc
-    #        allow for burn-in (to replace discard)
-    #        add supporto for different types of moves
-    #        add support for Pool
-    """
-    Classe wrapper di base per l'utilizzo dell'algoritmo MCMC (Markov Chain Monte Carlo)
-    tramite la libreria `emcee`.
-
-    Parameters
-    ----------
-    model : object
-        Istanza di un oggetto modello che deve fornire le seguenti proprietà/metodi:
-        - `free_parameters`: lista dei parametri liberi, ciascuno con `.value` e `.bounds` (tuple (min, max)).
-        - `call(grid, *theta)`: metodo che, dati un grid e i valori dei parametri, restituisce l'output del modello.
-        - `parameters_names`: lista dei nomi di tutti i parametri (sia liberi che non).
-        - `parameters_keys`: chiavi identificative di tutti i parametri (sia liberi che non).
-        - `parameters_values_dict`: dizionario dei parametri, con nome come chiave e valore come valore del parametro.
-        - `n_dim`: dimensione del grid (es. 1D, 2D, ...).
-        - `__getitem__(pname)`: per accedere a un parametro a partire dal suo nome (restituisce un oggetto con `.frozen`).
-
-    **kwargs
-        Ulteriori argomenti passati internamente a `emcee.EnsembleSampler`. Ad esempio:
-        - `moves`
-        - `backend`
-        - etc.
-        
-    TODO: add support for different statistcs
-    TODO: modify call to account for number of dimensions of the model
-    """
-
-    def __init__(self, model, **kwargs) -> None:
+class Fitter:
+    def __init__(self, model):
         self._model = model
-        self.emcee_kwargs = kwargs
-    
-        # NOTE currently to discuss
-        if self.model.n_outputs > 1:
-            raise NotImplementedError('Multiple outputs are not currentrly supported')
-        
-        #if self.model.has_constrains:
-        self.loglike = self.unconstrained_loglike
-        #else:
-        #self.loglike = self.constrained_loglike
 
     @property
-    def model(self):
-        """
-        Riferimento al modello associato a questa classe MCMC.
-
-        Returns
-        -------
-        object
-            Il modello utilizzato per la stima MCMC.
-        """
+    def model(self) -> Model:
         return self._model
-    
+
     @model.setter
-    def model(self, value):
+    def model(self, value) -> None:
         if not isinstance(value, Model):
-            raise TypeError('Model to be optimize must be istance of class Model')
+            raise TypeError("Model must be instance of Model class")
+
+    @property
+    def var_names(self) -> list[str]:
+        return [key for key in self.model.parameters_keys if self.model[key].is_free]
+
+    def _check_grid_conflicts(self, grid: np.ndarray):
+        if grid.shape[0] != len(self.model.grid_variables):
+            raise ValueError(
+                f"Grid number of elements {grid.ndim} do not match model number of elements {len(self.model.grid_variables)}"
+            )
+
+    def _check_prior_conflicts(self, theta0: np.ndarray | list):
+        for i, (value, param) in enumerate(zip(theta0, self.model.free_parameters)):
+            pval = param.prior(value)
+            if not np.isfinite(pval):
+                raise ValueError(
+                    f"Initial value {value} for param {self.var_names[i]} conflicts with is prior!"
+                )
+            if value < param.bounds[0] or value > param.bounds[1]:
+                raise ValueError(
+                    f"Initial value {value} for param {self.var_names[i]} conflicts with its bounds!"
+                )
+
+    def _check_data_conflicts(self, grid, theta0, data):
+        # better to use try: with custom model errors
+        assert grid.shape[0] == len(self.model.grid_variables)
+        model_output = self.model.call(grid, *theta0)
+        if np.shape(model_output) != np.shape(data):
+            raise ValueError(
+                f"Model incompatibility between output {np.shape(model_output)}  and data {np.shape(data)}"
+            )
+
+    def _check_burnin_conflicts(self, burn_in):
+        if burn_in < 0:
+            raise ValueError("numver of burn-in step must be >= 0 or None")
+
+    @singledispatchmethod
+    def _check_type_grid(self, grid):
+        # see if number of elements match expected ndim
+        raise TypeError("provided grid elements must be lists or numpy arrays")
+
+    @_check_type_grid.register
+    def _(self, grid: list) -> np.ndarray:
+        grid_array = np.array([*grid])
+        if grid_array.ndim == 1:
+            grid_array = np.array([grid_array])  # model.call require [x,y] or just [x]
+        self._check_grid_conflicts(grid_array)
+        return grid_array
+
+    @_check_type_grid.register
+    def _(self, grid: np.ndarray) -> np.ndarray:
+        if grid.ndim == 1:
+            grid_array = np.array([grid])
+        else:
+            grid_array = grid
+        self._check_grid_conflicts(grid_array)
+        return grid_array
+
+    @singledispatchmethod
+    def _check_type_theta0(self, theta0):
+        """check the type of theta0 and prepare it for the fit"""
+        raise TypeError("Unsupported type for theta0")
+
+    @_check_type_theta0.register
+    def _(self, theta0: list) -> np.ndarray:
+        # theta0 is a list, loop and check values and or prior
+        if len(theta0) != self.model.n_free_parameters:
+            raise ValueError(
+                "Dimension miss match! len of initial guess must be equal to paramater space number od dimensions!"
+            )
+        return np.array([*theta0])
+
+    @_check_type_theta0.register
+    def _(self, theta0: dict) -> None:
+        # theta0 is a dict, see if key-values are ok
+        tmp = []
+        for key in list(theta0.keys()):
+            if key not in self.model:
+                raise ValueError(f"unknown parameter: {key}")
+            if not self.model[key].is_free:
+                raise ValueError(f"Parameter {key} is not free")
+
+        for key in self.model.parameters_keys:
+            if self.model[key].is_free:
+                if key in theta0:
+                    tmp.append(theta0[key])
+                else:
+                    tmp.append(self.model[key].value)
+        # print(tmp)
+        return self._check_type_theta0(tmp)
+
+    @_check_type_theta0.register
+    def _(self, theta0: np.ndarray) -> np.ndarray:
+        self._check_prior_conflicts(theta0)
+        return theta0
+
+    def _parse_grid_and_theta0(self, grid, theta0, error, data, kwargs):
+        if grid is not None:
+            grid = self._check_type_grid(grid)
+        else:
+            tmp_grid = []
+            grid_check = self.model.grid_variables
+            for key in grid_check:
+                if key not in kwargs:
+                    raise ValueError(f"Expected grid variable {key} as keyboard args")
+
+                tmp_grid.append(kwargs[key])
+                kwargs.pop(key)
+            grid = self._check_type_grid(tmp_grid)
+
+        # control theta0
+        if theta0 is None:
+            print("theta0 is None")
+            theta0 = np.array([p.value + 0.0 for p in self.model.free_parameters])
+            # theta0 = {key:self.model[key].value for key in self.model.parameters_keys if self.model[key].is_free}
+
+        # print("theta0", theta0)
+        initial_point = self._check_type_theta0(theta0)  # np array of shape(n_varys, 1)
+        # print("initial", initial_point, type(initial_point[0]))
+        # controll data compatibility
+        if error is None:
+            error = np.ones(np.shape(data))  # stupid workaround
+        self._check_data_conflicts(grid=grid, theta0=initial_point, data=data)
+        # TODO: add support for multiple data dimension
+
+        return grid, theta0, error, initial_point, kwargs
+
+
+class ChiSquareFitter(Fitter):
+    """
+    Classe che implementa il fitter basato sul chi-square, ereditando i metodi
+    comuni di validazione da GenericFitter.
+    """
+
+    def __init__(self, model, **kwargs):
+        super().__init__(model=model, **kwargs)
+        # Se hai altri parametri specifici per il fit chi-square, gestiscili qui.
+
+    def _residuals(
+        self, theta: np.ndarray, xdata: np.ndarray, ydata: np.ndarray, yerr: np.ndarray
+    ) -> np.ndarray:
+        """
+        Calcola i residui normalizzati:
+            residui = (ydata - model(xdata, theta)) / yerr
+        NOTE: lest_square vuole il vettore dei residui 1D
+        """
+        ymodel = self.model.call(xdata, *theta)
+        return (ydata - ymodel) / yerr
+
+    def _residuals_d(
+        self, theta: np.ndarray, xdata: np.ndarray, ydata: np.ndarray, yerr: np.ndarray
+    ):
+        return self._residuals(theta, xdata, ydata, yerr).ravel()
+
+    def fit(self, *, data, grid=None, theta0=None, error=None, **kwargs):
+        """
+        Esegue il fit minimizzando la somma dei quadrati dei residui (chi-square).
+
+        Parametri
+        ---------
+        data : array-like
+            Vettore di dati osservati (y).
+        grid : array-like, opzionale
+            Coordinate (x) dei dati. Se None, vengono cercati in `kwargs`
+            o usati i default del modello.
+        theta0 : list, dict, np.ndarray, opzionale
+            Valori iniziali dei parametri. Se None, usa quelli del modello.
+        error : array-like, opzionale
+            Errori (yerr). Se None, assume un vettore di 1.
+        kwargs :
+            Parametri addizionali (potrebbero includere grid variables
+            come x, y, ecc., se il modello li richiede).
+
+        Ritorna
+        -------
+        ChiSquareResult
+            Un oggetto con i risultati del fit (parametri ottimali, covarianza, ecc.).
+        """
+
+        grid, theta0, error, initial_point, kwargs = self._parse_grid_and_theta0(
+            grid, theta0, error, data, kwargs
+        )
+
+        # 5) Chiamata a least_squares
+        #    Definisco una lambda per passare i parametri, la grid e i dati/errori.
+        # choose the correct callable:
+        if data.ndim > 1:
+            residuals = self._residuals_d  # is this correct?
+        else:
+            residuals = self._residuals
+
+        res = least_squares(
+            fun=lambda t: residuals(t, grid, data, error),
+            x0=initial_point,
+            # bounds può essere estratto dai parametri free del modello:
+            bounds=(
+                [p.bounds[0] for p in self.model.free_parameters],
+                [p.bounds[1] for p in self.model.free_parameters],
+            ),
+            # Puoi aggiungere altri parametri di least_squares qui:
+            **kwargs,
+        )
+
+        return res
+
+
+class MCMC(Fitter):
+    def __init__(self, model, **kwargs):
+        # what kwargs?
+        super().__init__(model=model)
 
     def logprior(self, theta: np.ndarray) -> float:
         """
@@ -335,13 +487,8 @@ class MCMC:
             Il valore della log-prior.
         """
         return sum(param(val) for param, val in zip(self.model.free_parameters, theta))
-        
-    def constrained_loglike(self, theta, xdata, ydata, yerr) -> float:
-        '''loglike function but for constrained parameters'''
-        # map constrains to relative args
-        raise NotImplementedError('Please boss, I m tired')
-    
-    def unconstrained_loglike(
+
+    def loglike(
         self,
         theta: np.ndarray,
         xdata: Union[list, np.ndarray],
@@ -370,9 +517,9 @@ class MCMC:
         """
         # Calcolo del modello
         #
-        
+
         ymodel = self.model.call(xdata, *theta)
-       
+
         return -0.5 * np.nansum(((ydata - ymodel) / yerr) ** 2)
 
     def log_probability(
@@ -410,7 +557,6 @@ class MCMC:
         self,
         theta0: np.ndarray,
         nwalkers: int,
-        bounds: list,
         dispersion: float,
     ) -> np.ndarray:
         """
@@ -439,27 +585,23 @@ class MCMC:
         if dispersion < 0 or dispersion > 1:
             raise ValueError("Initial points dispersion must be > 0 and < 1")
 
-        # Controllo che l'inizializzazione non sia fuori dai bound
-        for i, point in enumerate(theta0):
-            if not (bounds[i][0] < point < bounds[i][1]):
-                raise ValueError(
-                    f"Il valore iniziale per il parametro '{self.model.parameters_names[i]}' "
-                    f"è fuori dal bound {bounds[i]}!"
-                )
-
         def generate_valid_position() -> np.ndarray:
             while True:
                 # Genera una posizione con dispersione casuale (10%)
-                candidate = theta0 + dispersion * np.abs(theta0) * (
-                    2 * np.random.rand(ndim) - 1
-                )
+                candidate = theta0 + dispersion * (2 * np.random.rand(ndim) - 1)
                 # Controlla se tutti i parametri rispettano i bound
                 if all(
-                    np.isfinite(p.prior(p.value)) for p in self.model.free_parameters 
-                    #lower <= value <= upper
-                    #for value, (lower, upper) in zip(candidate, bounds)
+                    np.isfinite(p.prior(p.value)) for p in self.model.free_parameters
                 ):
                     return candidate
+
+        # def generate_valid_position() -> np.ndarray:
+        #     while True:
+        #         candidate = theta0 + dispersion * (2 * np.random.rand(ndim) - 1)
+        #         # Verifica la prior sul candidate
+        #         if all(np.isfinite(param.prior(val))
+        #             for param, val in zip(self.model.free_parameters, candidate)):
+        #             return candidate
 
         # Popola l'array con posizioni valide per ciascun walker
         for i in range(nwalkers):
@@ -467,247 +609,117 @@ class MCMC:
 
         return pos
 
-    def _check_initial_state(
-        self,
-        theta0: Optional[Union[list, np.ndarray, Dict[str, float]]],
-        grid: Union[list, np.ndarray],
-        data: Union[list, np.ndarray],
-    ) -> np.ndarray:
-        """
-        Verifica e prepara lo stato iniziale `theta0` in base a come viene fornito (lista, array, dict).
-        Inoltre controlla la compatibilità tra dimensione dei dati e output del modello.
-
-        Parameters
-        ----------
-        theta0 : list or np.ndarray or dict, optional
-            Stima iniziale dei parametri. Se `None`, vengono usati i valori
-            già presenti nel modello per i parametri liberi.
-        grid : array-like
-            Grid su cui valutare il modello (può essere monodimensionale o multidimensionale).
-        data : array-like
-            Valori osservati corrispondenti alla valutazione del modello su `grid`.
-
-        Returns
-        -------
-        np.ndarray
-            Array di valori iniziali (stima dei parametri) in formato numpy (ndim,).
-
-        Raises
-        ------
-        TypeError
-            Se `grid` non è un array-like o se `theta0` non è un tipo supportato (list, dict, np.ndarray).
-        ValueError
-            Se la dimensione del `grid` non corrisponde a quella attesa dal modello,
-            o se la lunghezza di `theta0` non corrisponde al numero di parametri liberi,
-            o se la dimensione dei dati non corrisponde alla dimensione dell'output del modello.
-        """
-        
-        
-        if not isinstance(grid, (list, np.ndarray)):
-            raise TypeError(
-                "`grid` deve essere una lista o un numpy array (es. [X], [X, Y, ...])."
-            )
-        if isinstance(grid, list):
-            grid = np.array(grid)
-
-        # Controllo dimensione `grid` e modello
-        if np.shape(grid)[0] != self.model.n_dim:
-            raise ValueError(
-                f"La dimensione del grid ({grid.ndim}) non corrisponde "
-                f"alla dimensione del modello ({self.model.n_dim})."
-            )
-
-        # Se theta0 è None, uso i valori del modello
-        if theta0 is None:
-            theta0 = [p.value for p in self.model.free_parameters]
-
-        # Se theta0 è un dict
-        if isinstance(theta0, dict):
-            # Copio i parametri correnti del modello
-            initial = {**self.model.parameters_values_dict}
-            for pname, pval in theta0.items():
-                param = self.model[pname]
-                if not param.is_free:
-                    raise ValueError(
-                        f"Il parametro '{pname}' è frozen. Fornire solo valori per parametri free."
-                    )
-                initial[pname] = pval
-            # Ricostruisco array in ordine
-            theta0 = np.array(
-                [
-                    initial[name]
-                    for name in self.model.parameters_keys
-                    if not self.model[name].frozen
-                ]
-            )
-        elif isinstance(theta0, (list, np.ndarray)):
-            theta0 = np.array(theta0, dtype=float)
-        else:
-            raise TypeError(
-                "L'ipotesi iniziale (theta0) deve essere una lista, un dict o un numpy array."
-            )
-
-        # Verifico che sia veramente un np.ndarray
-        assert isinstance(theta0, np.ndarray)
-
-        # Check lunghezza theta0 = numero di parametri liberi
-        if len(theta0) != len(self.model.free_parameters):
-            raise ValueError(
-                f"Il numero di valori iniziali ({len(theta0)}) non corrisponde "
-                f"al numero di parametri liberi ({len(self.model.free_parameters)})."
-            )
-
-        # Verifica della compatibilità tra dati e output del modello
-        model_output = self.model.call(grid, *theta0)
-        if np.shape(model_output) != np.shape(data):
-            raise ValueError(
-                f"La dimensione dei dati {np.shape(data)} non corrisponde "
-                f"alla dimensione dell'output del modello {np.shape(model_output)}."
-            )
-
-        return theta0, grid
-
-    def _look_invalid_initial_points(self, theta):
-        names = [name for name in self.model.parameters_keys if self.model[name].is_free]
-        assert len(names) == len(theta)
-        
-        for name, val in zip(names, theta):
-            if not np.isfinite(self.model[name].prior(val)):
-                raise ValueError(f'val {val} for param {name} has conflict with prior {self.model[name].prior}')
-        
-    
     def fit(
         self,
-        #grid: Union[list, np.ndarray],
-        data: Union[list, np.ndarray],
-        theta0: Optional[Union[list, np.ndarray, Dict[str, float]]] = None,
-        error: Optional[Union[list, np.ndarray]] = None,
         *,
-        nwalkers: int = 32,
-        nsteps: int = 5000,
-        discard: int = 100,
-        dispersion: float | int = 0.1,
-        optimize: bool = False,
-        progress: bool = True,
-        thin: int = 1,
+        data,
+        grid=None,
+        theta0=None,
+        error=None,
+        nwalkers=32,
+        nsteps=1000,
+        dispersion=0.1,
+        burn_in=None,
+        pool=None,
+        progress=True,
+        optimize=True,
+        thin=1,
+        optimizer_kwargs={},
         **kwargs,
-    ) -> MCMCResult:
-        # TODO modificare dispersion e initial pointin modo da permettere di avere come input direttamente l'array corretto come emcee
-        """
-        Esegue il fitting MCMC del modello sui dati forniti.
+    ):
+        # check for correct initial grid:
+        # if grid is not None:
+        #     grid = self._check_type_grid(grid)
+        # else:
+        #     tmp_grid = []
+        #     grid_check = self.model.grid_variables
+        #     for key in grid_check:
+        #         if key not in kwargs:
+        #             raise ValueError(f"Expected grid variable {key} as keyboard args")
 
-        Parameters
-        ----------
-        
-        data : array-like
-            Dati osservati corrispondenti alla valutazione del modello su `grid`.
-        theta0 : list or np.ndarray or dict, optional
-            Stima iniziale dei parametri. Se `None`, vengono usati i valori
-            già presenti nel modello per i parametri liberi.
-        error : array-like, optional
-            Incertezze (errore standard) sui dati osservati.
-            Se `None`, si assume un errore costante (o lo si può gestire diversamente).
-        nwalkers : int, optional
-            Numero di walker da utilizzare nell'algoritmo MCMC (default=32).
-        nsteps : int, optional
-            Numero di passi da eseguire per ogni walker (default=5000).
-        discard : int, optional
-            Numero di step iniziali (burn-in) da scartare (default=100).
-        thin : int, optional
-            Frequenza di thinning; un valore di 15 significa prendere 1 campione ogni 15 (default=15).
-        **kwargs : dict
-            model.grid_variables possono essere passate direttammente.\
-            Argomenti aggiuntivi passati a `emcee.EnsembleSampler.run_mcmc`.
+        #         tmp_grid.append(kwargs[key])
+        #         kwargs.pop(key)
+        #     grid = self._check_type_grid(tmp_grid)
 
-        Returns
-        -------
-        flat_samples : np.ndarray
-            Array di campioni estratti dalla catena MCMC dopo il burn-in e il thinning.
-        fig : matplotlib.figure.Figure
-            Figura `corner` che mostra le distribuzioni a posteriori dei parametri.
-        """
-        # check sulla griglia data come kwargs
-        grid = []
-        for var in self.model.grid_variables:
-            if var in kwargs:
-                element = kwargs.pop(var)
-                grid.append(element)
-            else:
-                raise KeyError(f"La variabile di griglia '{var}' non è presente in kwargs.")
+        # # control theta0
+        # if theta0 is None:
+        #     print('theta0 is None')
+        #     theta0 = np.array([p.value + 0.0 for p in self.model.free_parameters])
+        #     #theta0 = {key:self.model[key].value for key in self.model.parameters_keys if self.model[key].is_free}
 
-        self.emcee_kwargs.update(**kwargs)
-        # Controlla lo stato iniziale e i dati
-        theta0, grid = self._check_initial_state(theta0=theta0, grid=grid, data=data)
-        self._look_invalid_initial_points(theta0)
+        # print('theta0',theta0)
+        # initial_point = self._check_type_theta0(theta0)  # np array of shape(n_varys, 1)
+        # print('initial',initial_point, type(initial_point[0]))
+        # # controll data compatibility
+        # if error is None:
+        #     error = np.ones(np.shape(data))  # stupid workaround
+        # self._check_data_conflicts(grid=grid, theta0=initial_point, data=data)
 
-        if error is None:
-            error = np.ones(np.shape(data))
-            
-        if optimize is True:
-            # guess initial position by optimization
-            from scipy.optimize import minimize
-
-            initial_point = minimize(
-                lambda xtheta, xgrid, xdata, err: -self.log_probability(xtheta, xgrid, xdata, err),
-                x0=theta0,
-                args=(grid, data, error),
-                bounds=[p.bounds for p in self.model if p.is_free],
-                
-            )
-            if initial_point.success:
-                print(f"Optimization done, initial position is {initial_point.x}")
-                theta0 = initial_point.x
-            else:
-                print('initial optimization failed')
-            # raise NotImplementedError('Prior Optimization not implemented yet')
-
-        # Genera posizioni iniziali per i walker
-        init_positions = self._emcee_positions(
-            dispersion=dispersion,
-            theta0=theta0,
-            nwalkers=nwalkers,
-            bounds=[p.bounds for p in self.model if p.is_free],
+        # TODO: add support for multiple data dimension
+        grid, theta0, error, initial_point, kwargs = self._parse_grid_and_theta0(
+            grid, theta0, error, data, kwargs
         )
 
-        nwalkers, ndim = init_positions.shape
-        assert ndim == len(self.model.free_parameters)
-        # Inizializza il sampler di emcee
-        # check for cnstrained parameters:
-        
+        # now ready to setup the sampler
+        # setup the sampler and add burn-in support
         sampler = emcee.EnsembleSampler(
-            nwalkers,
-            ndim,
-            self.log_probability,
-            args=(grid, data, error),
-            **self.emcee_kwargs,
+            nwalkers=nwalkers,
+            ndim=len(self.model.free_parameters),
+            log_prob_fn=self.log_probability,  # to write
+            args=(grid, data, error),  # to write
+            pool=pool,
+            **kwargs,
         )
 
-        # setattr( sampler, "log_prob_fn",lambda p: self.log_probability(p, grid, data, error))
-        # Esecuzione MCMC vera e propria
-        sampler.run_mcmc(init_positions, nsteps, progress=progress, **kwargs)
+        # optimization step to guess the initial point
+        if optimize:
+            # from scipy.optimize import minimize
+            # #print(initial_point, type(initial_point))
+            # optimized_point = minimize(
+            #     lambda xtheta, xgrid, ydata, err: -self.log_probability(
+            #         xtheta, xgrid, ydata, err
+            #     ),
+            #     x0=initial_point,
+            #     args=(grid, data, error),
+            #     bounds=[p.bounds for p in self.model if p.is_free],
+            # )
+            least_squares_fitter = ChiSquareFitter(self.model)
+            optimized_point = least_squares_fitter.fit(
+                grid=grid, theta0=theta0, data=data, error=error, **optimizer_kwargs
+            )
+            if optimized_point.success:
+                print(f"Optimization done, initial position is {optimized_point.x}")
+                initial_point = optimized_point.x
+            else:
+                print("initial optimization failed")
 
-        # Prepara i nomi dei parametri
-        labels = [
-            key for key in self.model.parameters_keys if self.model[key].is_free
-        ]
+        initial_positions = self._emcee_positions(initial_point, nwalkers, dispersion)
 
-        
-        # Inizializziamo MCMCResult
-        # 2) Crea l'oggetto MCMCResult passandogli il sampler e gli altri oggetti necessari
+        # setu the burn-in phase
+        if burn_in is not None:
+            self._check_burnin_conflicts(burn_in)
+            pos, _, _ = sampler.run_mcmc(initial_positions, burn_in, progress=progress)
+            # reset the sampler
+            sampler.reset()
+            # print(pos.shape)
+            # initial_positions = self._emcee_positions(pos, nwalkers, dispersion)
+            initial_positions = pos
+
+        # now run the sampler
+        pos, prob, state = sampler.run_mcmc(
+            initial_positions, nsteps, progress=progress
+        )
+
+        # to resolve
         result = MCMCResult(
             sampler=sampler,
             model=self.model,  # ad esempio un oggetto con metodo .call
             grid=grid,
             data=data,
-            var_names=labels,  # lista dei nomi
-            discard=discard,  # burn-in
+            var_names=self.var_names,  # lista dei nomi
+            discard=0,  # burn-in
             thin=thin,  # thinning
             success=True,
             message="MCMC sampling completed successfully",
         )
-        if optimize:
-            result.__setattr__('linear_bf', initial_point.x)
-
-        #
-
         return result

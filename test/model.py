@@ -2,7 +2,7 @@ from functools import partial
 import inspect
 from copy import deepcopy
 import warnings
-from parameter import Parameter, ParameterHandler
+from parameter import Constrain, Parameter, ParameterHandler
 from typing import Any, Callable, Dict, List,  Tuple
 #from io import StringIO
 from collections  import OrderedDict
@@ -17,6 +17,7 @@ from tabulate import tabulate
 #       e poi faccio pipe con modello.
 #       questo vuol dire modificare la logica di pipe per fare in modo che sia corretta secondo questa nuova logica
 
+# TODO: modificare la nuova interfaccia dei constrain per non esporla al utente
 '''
 TEST: aggiungere un layer che contiene i constrain.
 esempio: classe Layer che applica i constrain
@@ -26,9 +27,16 @@ i constrain si aggiungono al modello e non al parametro
 l'API deve intercettare il parametro (dentro l'handler) e freezarlo in accordo col constrain
 LIMITI: se metto il constrain su modello composito, il sottomodello adesso ha un parametro freezato anche
 se preso da solo.
+
+come funziona:
+
+model.add_constrain(Constrain)
+dove Constrain è classe che wrappa funzione 
+mappa gli args della funzione ai parametri del handler e se ha un match allora model[match].has_coinstrain = True
 '''
 
 class ConstrainLayer:
+    # per ora è lista  dentro modello
     pass
 
 
@@ -63,7 +71,9 @@ class Model:
         self._grid_variables = []  # Inizializza _grid_variables nel costruttore
         self._partial = partial(self._callable, **self.parameters_values_dict)
         
-        #self.constrains = []
+        # legacy da unificare
+        self.constrains = []
+        self.constrains_names = set()
 
     def _update_cache(self, key=None, value=None) -> None:        
         self._parameters._update_cache(key, value)
@@ -149,8 +159,8 @@ class Model:
         return self.parameters._binary_melt_map
     
     @property
-    def has_constrains(self):
-        return any(p.is_constrained for p in self)
+    def has_constrains(self) -> bool:
+        return len(self.constrains) > 0#any(p.is_constrained for p in self)
 
 
     # Simple Model is a leaf
@@ -170,7 +180,8 @@ class Model:
     @property
     def frozen_indeces(self) -> List[int]:
         return self.parameters.frozen_indeces
-        
+    
+    
 
     def _map_name_to_index(self, name) -> int:
         '''Return the index of the parameter -name- inside the ordered dict'''
@@ -517,11 +528,42 @@ class Model:
         """
         return self._callable(*args, **kwargs)
     
+    def add_constrain(self, constrain:Constrain):
+        if not isinstance(constrain, Constrain):
+            raise TypeError('New constrain must be of type Constrain')
+        
+        if constrain.reduce_varys:
+            reduced_key = constrain.tied_param
+            self[reduced_key]._is_tied = True
+        
+        if constrain.name in self.constrains_names:
+            raise ValueError('This constrain is already present inside the model')
+        
+        self.constrains.append(constrain)
+        self.constrains_names.add(constrain.name)
+    
+    def remove_constrain(self, constrain:Constrain=None):
+        if constrain is None:
+            self.constrains = []
+            self.constrains_names = set()
+        else:
+            # ugly loop
+            for i in range(len(self.constrains)):
+                if self.constrains[i].name == constrain.name:
+                    # see if it was reducing vary
+                    if self.constrains[i].reduce_varys:
+                        self[self.constrains[i].tied_param]._is_tied = False
+                    self.constrains.pop(i)
+                    self.constrains_names.remove(constrain.name)
+                    
+            
+        
     def _apply_constrains(self, kwargs):
         if self.has_constrains:
-            for layer in self:
-                if self.has_constrains:
-                    kwargs = layer(kwargs)
+            for layer in self.constrains:
+                #print('before',kwargs)
+                kwargs = layer(kwargs)
+                #print('after', kwargs)
         return kwargs
     
     def validate_args(self, args):
@@ -553,6 +595,7 @@ class Model:
             final_kwargs[p.name] = p.value
         
         # resolve constrains
+        # NOTE: from bechmarks this make it go from 0.76sec to 0.8 sec for 100_000 evaluations
         final_kwargs = self._apply_constrains(final_kwargs)
         
                 
@@ -624,6 +667,9 @@ class CompositeModel(Model):
     _parameters = OrderedDict()
     _name = "CompositeModel"
     _callable = None
+    constrains = []
+    constrains_names = set()
+    
 
     
 
@@ -646,6 +692,9 @@ class CompositeModel(Model):
         )
         self.submodels = self._collect_submodels()
         
+        #legacy to unify
+        self.constrains = []
+        self.constrains_names = set()
 
     @property
     def left(self) -> Model|None:
@@ -997,15 +1046,16 @@ class CompositeModel(Model):
             else:
                 tmp[key] = self.parameters_values_dict[key]
 
+        self._apply_constrains(tmp)
         
         # now solve the constrains
-        for key, param in zip(self.parameters_keys, self):
-            if param.has_constrain:
-                # print(
-                #     f"param {key} with val {tmp[key]} is map to param {param.constrain.param} with val {tmp[param.constrain.param]} to a val of {param.constrain(tmp[param.constrain.param])}"
-                # )
-                # print(f'test value 100: {param.constrain(100)}')
-                tmp[key] = param.constrain(tmp[param.constrain.param])
+        # for key, param in zip(self.parameters_keys, self):
+        #     if param.has_constrain:
+        #         # print(
+        #         #     f"param {key} with val {tmp[key]} is map to param {param.constrain.param} with val {tmp[param.constrain.param]} to a val of {param.constrain(tmp[param.constrain.param])}"
+        #         # )
+        #         # print(f'test value 100: {param.constrain(100)}')
+        #         tmp[key] = param.constrain(tmp[param.constrain.param])
                 
         left, right = self._map_kwargs(tmp)
         
