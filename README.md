@@ -1,15 +1,23 @@
-# CosmoSynth
- Fast and easy to use low-level Framework for managing complex parametric models
+### 🚧 **Work in Progress!** 🚧
 
+> ⚠️ **CosmoSynth is still a work in progress!**  
+> It’s not mature or intended to be _production-ready_. Expect significant changes—many of which are happening outside this repo!
 
-# TODO
- add support for tied parameters
- add supoprt for multiple datasets
- asteamline the validation of args and kwarsg in a common way for __call__, evaluate e .call()
+## 🚀 **Why CosmoSynth?**
 
+CosmoSynth is more than just a library—it's an idea: making it easy and _Pythonic_ to build flexible yet powerful models.
 
- # IDEA
- per aggiungere il supporto a parametri tied o simili, posso 
- modificare soltanto il fitter in modo che durante la valutazione del modello applichi i dovuti constrains.
- In principio questo mi permette di definire come constrain anche il freeze di un parametro
- I constrain di un parametro possono essere rappresentati a questo punto come una priority-que in cui applico i callable nel corretto ordine
+There are already well-established, battle-tested libraries for modeling and fitting, such as **Astropy** and **LmFit**, both of which greatly inspire CosmoSynth. However, they have some limitations:
+
+- **Astropy** doesn’t natively support fitting custom models with MCMC libraries like `emcee`.
+- **LmFit** does, but it often introduces computational overhead, sacrificing performance.
+
+CosmoSynth aims to **bridge the gap**, combining the best of both worlds: an intuitive interface **without** compromising efficiency. 
+
+### ✅ **What You Can Do**
+Here’s what **CosmoSynth** supports right now:
+- 🔧 **Define models** from user-defined functions.
+- 🔗 **Combine models** using various operations.
+- 🎯 **Add or remove constraints** of different types on individual model parameters.
+- 🔒 **Fix parameters** when needed.
+- 📊 **Fit models to observational data** with a direct interface and multiple optimization methods.
